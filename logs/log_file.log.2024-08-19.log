@@ -1,0 +1,4 @@
+MainThread - 2024-08-19 15:00:51,037 - base - log_request_success:270 - INFO - POST http://101.43.232.153:9200/science-article-metadata-v3/_search [status:200 request:24.375s]
+MainThread - 2024-08-19 15:02:23,653 - base - log_request_success:270 - INFO - POST http://101.43.232.153:9200/science-article-metadata-v3/_search [status:200 request:14.892s]
+MainThread - 2024-08-19 15:03:22,029 - base - log_request_success:270 - INFO - POST http://101.43.232.153:9200/science-article-metadata-v3/_search [status:200 request:19.351s]
+MainThread - 2024-08-19 15:03:26,944 - phoenix_operate - close_all:25 - INFO - 执行结束，关闭所有phoenix连接

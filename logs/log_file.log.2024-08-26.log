@@ -1,0 +1,4 @@
+MainThread - 2024-08-26 17:18:17,925 - phoenix_operate - find:69 - INFO - [('0001', 'test')]
+MainThread - 2024-08-26 17:18:17,926 - phoenix_operate - close_all:25 - INFO - 执行结束，关闭所有phoenix连接
+MainThread - 2024-08-26 17:19:18,430 - phoenix_operate - find:69 - INFO - [('0001', 'test')]
+MainThread - 2024-08-26 17:19:18,430 - phoenix_operate - close_all:25 - INFO - 执行结束，关闭所有phoenix连接

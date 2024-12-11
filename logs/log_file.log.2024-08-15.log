@@ -1,0 +1,8 @@
+MainThread - 2024-08-15 16:45:59,742 - base - log_request_success:270 - INFO - POST http://101.43.232.153:9200/science-article-metadata-v3/_search [status:200 request:0.405s]
+MainThread - 2024-08-15 16:47:46,557 - base - log_request_success:270 - INFO - POST http://101.43.232.153:9200/science-article-metadata-v3/_search [status:200 request:5.916s]
+MainThread - 2024-08-15 16:56:25,601 - base - log_request_success:270 - INFO - POST http://101.43.232.153:9200/science-article-metadata-v3/_search [status:200 request:0.230s]
+MainThread - 2024-08-15 17:11:22,976 - base - log_request_success:270 - INFO - POST http://101.43.232.153:9200/science-article-metadata-v3/_search [status:200 request:6.140s]
+MainThread - 2024-08-15 17:21:32,210 - base - log_request_success:270 - INFO - POST http://101.43.232.153:9200/science-article-metadata-v3/_search [status:200 request:8.112s]
+MainThread - 2024-08-15 17:22:38,686 - base - log_request_success:270 - INFO - POST http://101.43.232.153:9200/science-article-metadata-v3/_search [status:200 request:5.010s]
+MainThread - 2024-08-15 20:32:57,039 - base - log_request_success:270 - INFO - POST http://101.43.232.153:9200/science-article-metadata-v3/_search [status:200 request:4.804s]
+MainThread - 2024-08-15 20:35:08,100 - base - log_request_success:270 - INFO - POST http://101.43.232.153:9200/science-article-metadata-v3/_search [status:200 request:5.635s]
