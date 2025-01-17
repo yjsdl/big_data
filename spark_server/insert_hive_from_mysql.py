@@ -8,6 +8,12 @@ import pyspark.sql.functions as F
 
 
 def obtain_data_from_mysql():
+    _school_name = '西安建筑科技大学'
+    table_query = f"""
+         select school_id, school_name, not_school_name, condition1 from ai_dic_not_school 
+         where school_name = '{_school_name}'
+    """
+
     pf = spark.read.format("jdbc"). \
         option("url",
                "jdbc:mysql://192.168.1.194:3306/science_v9?characterEncoding=UTF-8&connectionCollation=utf8mb4_general_ci&useUnicode=true&useSSL=false&allowMultiQueries=true&serverTimezone=GMT%2b8"). \
