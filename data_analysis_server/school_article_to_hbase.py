@@ -6,11 +6,11 @@
 from datetime import datetime
 from pymongo import MongoClient
 # from hbase_server.log_code.log import logger
-from hbase_server.log_code.log import setup_logger
+from data_analysis_server.log_code.log import setup_logger
 from typing import List, Union
 import os
 import json
-import hbase_server.setting as log_setting
+import data_analysis_server.setting as log_setting
 from hbase_server.phoenix_operate import phoenixServer
 
 
@@ -143,6 +143,7 @@ class exportIncrementData:
                 third_id = article.get('third_id')
                 data_list.append(third_id)
                 article_data = article.get('exported')
+                article_data['volum'] = str(article_data["volum"])
                 article_data_list = list(article_data.values())
                 article_data_list.insert(0, third_id)
                 article_data_list.append(self._school_id)
