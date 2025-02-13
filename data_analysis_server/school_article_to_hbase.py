@@ -4,8 +4,8 @@
 # @file： school_article_to_hbase
 
 from datetime import datetime
+import hashlib
 from pymongo import MongoClient
-# from hbase_server.log_code.log import logger
 from data_analysis_server.log_code.log import setup_logger
 from typing import List, Union
 import os
@@ -67,35 +67,12 @@ class exportIncrementData:
             os.makedirs(self._output_path)
         return self._output_path
 
-    def find_download_ids(self) -> (list, list):
-        pipeline = [
-            {
-                '$lookup': {
-                    'from': self._from_db,  # 外部表
-                    'localField': 'third_id',  # 本表条件
-                    'foreignField': 'third_id',
-                    'as': 'customer_info'  # 外部表数据字段名
-                }
-            }
-        ]
-        collection = self.db.get_collection('todo_ids_weipu')
-        cursor = collection.aggregate(pipeline)
-        data_articles = []
-        not_exist_ids = []
-
-        for data in cursor:
-            customer_info = data.get('customer_info')
-            # 如果存在customer_info，库里有当前数据
-            if customer_info:
-                if len(customer_info) > 1:
-                    logger.info('当前维普id:%s存在多个数量' % data.get('third_id'))
-                else:
-                    customer_info = customer_info[0]
-                    export = customer_info.get('exported')
-                    data_articles.append(export)
-            else:
-                not_exist_ids.append({'third_id': data.get('third_id')})
-        return data_articles, not_exist_ids
+    @staticmethod
+    def id_md5(data):
+        data = data.encode(encoding='utf-8')
+        res = hashlib.new('md5', data)
+        result = res.hexdigest()
+        return result
 
     def export_school_all_variation(self, filter_year: int = None):
         """
@@ -145,10 +122,14 @@ class exportIncrementData:
                 article_data = article.get('exported')
                 article_data['volum'] = str(article_data["volum"])
                 article_data_list = list(article_data.values())
-                article_data_list.insert(0, third_id)
+                id_md5 = self.id_md5(third_id + self._query_value)
+                article_data_list.insert(0, id_md5)
+                article_data_list.insert(1, third_id)
+                article_data_list.append(self._query_value)
                 article_data_list.append(self._school_id)
+                article_data_list.append(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
                 article_data_tuple = tuple(article_data_list)
-                sql = """upsert into SCIENCE.SCIENCE_ARTICLE_METADATA values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"""
+                sql = """upsert into SCIENCE.RAW_WEIPU_ARTICLE_METADATA values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"""
                 data_state = self._phoenix_server.upsert_one(sql, article_data_tuple)
                 if data_state:
                     success_data.append(third_id)
@@ -181,7 +162,6 @@ def update_setting():
 
 
 if __name__ == '__main__':
-    # 郑州轻工业大学、北京理工大学、中国人民大学、北京工业大学、北京科技大学、郑州大学、齐鲁工业大学、 哈尔滨工程大学、东北师范大学
     update_setting()
     logger = setup_logger()
     c = exportIncrementData(
@@ -189,7 +169,7 @@ if __name__ == '__main__':
         single_school=True,
         # collection='relation_subject_weipu',
         query_field='school_name',
-        query_value='西安建筑科技大学',
-        year=list(range(2000, 2024))
+        query_value='中国人民大学',
+        year=list(range(1990, 2024))
     )
     c.run()
