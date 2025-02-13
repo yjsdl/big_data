@@ -5,13 +5,68 @@
 """
 通过spark读取phoenix映射的hbase表
 """
+import json
+import re
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import pandas_udf
 from pyspark.sql.types import StringType, BooleanType
-from pyspark.sql.functions import explode, split, col, concat_ws, sha2, udf, lit
-from pyspark.sql.functions import broadcast
+from pyspark.sql.functions import explode, split, col, concat_ws, sha2, udf, lit, md5, broadcast
 from pyspark.sql import DataFrame
+from datetime import datetime
 from pyspark.storagelevel import StorageLevel
+
+
+def filter_address(broadcast_not_school_list, address_str):
+    """
+    排除不符合条件的学校
+    :param broadcast_not_school_list:
+    :param address_str:
+    :return:
+    """
+    for not_name in broadcast_not_school_list.value:
+        if not_name in address_str:
+            return False
+    return True
+
+
+def analysis_org(broadcast_org_alias_name_dict, address_str):
+    """
+    通过地址匹配二级机构
+    :param broadcast_org_alias_name_dict:
+    :param address_str:
+    :return:
+    """
+    # broadcast_org_alias_name_dict = json.loads(broadcast_org_alias_name_str.value)
+    org_name_list = broadcast_org_alias_name_dict.value.get('org_name', [])
+    alias_name_format_list = broadcast_org_alias_name_dict.value.get('alias_name', [])
+    alias_org_name_dict = broadcast_org_alias_name_dict.value.get('split_alias_org_name_dict', {})
+
+    address_slice_str = address_str
+    org_list = []
+
+    name_list = org_name_list + alias_name_format_list
+    # 让机构名称按照长度排序，避免 《档案学通讯》杂志社 《档案学通讯》杂志社编辑部，这种情况出现
+    name_list.sort(key=len, reverse=True)
+    while True:
+        for org_name in name_list:
+            # 如果是以机构开头，说明是这个机构的，替换这个机构后继续查找
+            if address_slice_str.startswith(org_name):
+                raw_org_name = org_name
+                if org_name in alias_name_format_list:
+                    org_name = alias_org_name_dict.get(org_name, org_name)
+                org_list.append(org_name)
+                address_slice_str = address_slice_str.replace(raw_org_name, '', 1)
+        address_slice_str = address_slice_str[1:]
+        if address_slice_str == '':
+            break
+
+    return ';;'.join(org_list)
+
+
+def other_org_to_second(broadcast_org_alias_name_dict, org_str):
+    other_second_org_dict = broadcast_org_alias_name_dict.value.get('other_second_org_dict', {})
+    second_org_name = other_second_org_dict.get(org_str)
+    return second_org_name
 
 
 class weipuRosterAnalysis:
@@ -25,7 +80,9 @@ class weipuRosterAnalysis:
         )
         self._mysql_db = 'science'
         self._mysql_url = f"jdbc:mysql://43.140.203.187:3306/{self._mysql_db}?characterEncoding=UTF-8&connectionCollation=utf8mb4_general_ci&useUnicode=true&useSSL=false&allowMultiQueries=true&serverTimezone=GMT%2b8"
-        # phoenix_table = """SCIENCE.SCIENCE_ARTICLE_METADATA"""
+        # phoenix_table = """SCIENCE.RAW_WEIPU_ARTICLE_METADATA"""
+        self._org_mysql_db = "science_data_dept"
+        self._org_mysql_url = f"jdbc:mysql://43.140.203.187:3306/{self._org_mysql_db}?characterEncoding=UTF-8&connectionCollation=utf8mb4_general_ci&useUnicode=true&useSSL=false&allowMultiQueries=true&serverTimezone=GMT%2b8"
 
     def ai_dic_not_school_from_mysql(self):
         table_query = f"""
@@ -38,67 +95,119 @@ class weipuRosterAnalysis:
             .option('user', 'science-read') \
             .option('password', 'readkcidea')\
             .load()
+        print('--------------------------------------------学校排除策略------------------------------------------------')
         df.show()
         # 学校排除策略
         not_school_list = [row['condition1'] for row in df.collect()]
-        print(not_school_list)
         return not_school_list
 
+    def org_alias_name_from_mysql(self):
+        table_query = f"""
+         select short_name, alias_name, second_name from weipu_org_alias_name 
+             where school_id = {self._school_id}
+        """
+        df = spark.read.format('jdbc') \
+            .option('url', self._org_mysql_url) \
+            .option('query', table_query) \
+            .option('user', 'science-data-dept') \
+            .option('password', 'datadept1509')\
+            .load()
+        print("----------------------------------------维普机构表------------------------------------------------------")
+        df.show()
+        org_alias_name_list = df.collect()
+        org_alias_list = [[row['short_name'], row['alias_name']] for row in org_alias_name_list]
+        alias_org_dict = {}
+        for org_alias in org_alias_list:
+            org_name = org_alias[0]
+            alias_name = org_alias[1]
+            if alias_name != '':
+                alias_org_dict[alias_name] = org_name
+
+        other_second_org_list = [[row['short_name'], row['second_name']] for row in org_alias_name_list]
+        other_second_org_dict = {}
+        for other_second_name in other_second_org_list:
+            short_name = other_second_name[0]
+            second_name = other_second_name[1]
+            other_second_org_dict[short_name] = second_name
+
+        org_name_list = [row['short_name'] for row in org_alias_name_list]
+        alias_name_list = [row["alias_name"] for row in org_alias_name_list]
+
+        split_alias_org_name_dict = {}
+        alias_name_format_list = []
+        for one_alias_name in alias_name_list:
+            if one_alias_name != '':
+                one_alias_name_list = one_alias_name.split(';;')
+                for i in one_alias_name_list:
+                    split_alias_org_name_dict[i] = alias_org_dict.get(one_alias_name)
+                    alias_name_format_list.append(i)
+        result_dict = dict(org_name=org_name_list, alias_name=alias_name_format_list,
+                           split_alias_org_name_dict=split_alias_org_name_dict,
+                           other_second_org_dict=other_second_org_dict)
+        return result_dict
+
     @staticmethod
-    def replace_special_char(person_name: str):
-        person_name_str = person_name.replace('(', '（').replace(')', '）').replace('\\', '/')
-        for s in ['（特约专家）', '（指导老师）', '（辅导老师）', '（指导专家）', '指导专家/', '（整理者）', '（评论）', '（摘译）', '（审校）', '（综述）', '（口述）',
-                  '（整理）', '等、', '等', '《西安建筑科技大学学报》编辑部', '西安建筑科技大学学报编辑部'
-                  '（设计/撰文）', '（文/图）', '（插图）', '（指导）', '（图/文）', '（点评）', '（编译）', '（译）', '（校）', '（综述', '（图）', '通信作者']:
-            person_name_str = person_name_str.replace(s, '')
-        person_name_str.strip(*[',，；;。']).lower()
-        return person_name_str
+    def format_person_address(person_str, address_str):
+        def replace_special_char(raw_person_name: str):
+            raw_person_name_str = raw_person_name.replace('(', '（').replace(')', '）').replace('\\', '/')
+            pattern = r'\（.*?\）'
+            person_name_str = re.sub(pattern, '', raw_person_name_str)
+            for s in ['（特约专家）', '（指导老师）', '（辅导老师）', '（指导专家）', '指导专家/', '（整理者）', '（评论）', '（摘译）', '（审校）', '（综述）', '（口述）',
+                      '（整理）', '等、', '等', '《西安建筑科技大学学报》编辑部', '西安建筑科技大学学报编辑部', '编者', '本刊记者',
+                      '（设计/撰文）', '（文/图）', '（插图）', '（指导）', '（图/文）', '（点评）', '（编译）', '（译）', '（校）', '（综述', '（图）', '通信作者']:
+                person_name_str = person_name_str.replace(s, '')
+            person_name_str.strip(*[',，；;。']).lower()
+            for k in ['课题组', "专家组", "编辑部", "实验室", "测试组", "论坛", "委员会", "专员", "编者", "评论员"]:
+                if k in person_name_str:
+                    person_name_str = ''
+            if len(person_name_str) == 1:
+                person_name_str = ''
+            return person_name_str
 
-    # 定义 pandas_udf
-    @pandas_udf(StringType())
-    def format_row_pandas_udf(self, person_col, org_col):
-        def process_row(person_str, address_str):
-            if not address_str or not person_str:
-                return ''
-            person_list = person_str.split(';')
-            person_address_list = []
-            address_list = address_str.split(';')
-            address_dict = {}
-            for address in address_list:
-                address_num = address.split(']')[0].strip(*['。 ['])
-                try:
-                    address_name = address.split(']')[1].strip('')
-                except:
-                    address_name = ''
-                address_dict[address_num] = address_name
+        # person_str = person_address_str.split("|+|")[0]
+        # address_str = person_address_str.split("|+|")[1]
+        if not address_str or not person_str:
+            return ''
+        person_list = person_str.split(';')
+        person_address_list = []
+        address_list = address_str.split(';')
+        address_dict = {}
+        for address in address_list:
+            address_num = address.split(']')[0].strip(*['。 ['])
+            try:
+                address_name = address.split(']')[1].strip('')
+            except IndexError:
+                address_name = ''
+            address_dict[address_num] = address_name
 
-            for person in person_list:
-                person_name = person.split('[')[0].strip(*['。 '])
-                # 处理一些名字中的脏数据
-                person_name = self.replace_special_char(person_name)
-                try:
-                    person_nums = person.split('[')[1].strip(*['] 。'])
-                except:
-                    person_nums = ''
-                if ',' in person_nums:
-                    person_num_list = person_nums.split(',')
-                    for person_num in person_num_list:
-                        address_name = address_dict.get(person_num, '')
-                        person_address_list.append(f"{person_name}::{address_name}")
-                else:
-                    address_name = address_dict.get(person_nums, '')
+        for person in person_list:
+            person_name = person.split('[')[0].strip(*['。 '])
+            # 处理一些名字中的脏数据
+            person_name = replace_special_char(person_name)
+            try:
+                person_nums = person.split('[')[1].strip(*['] 。'])
+            except IndexError:
+                person_nums = ''
+            if ',' in person_nums:
+                person_num_list = person_nums.split(',')
+                for person_num in person_num_list:
+                    address_name = address_dict.get(person_num, '')
                     person_address_list.append(f"{person_name}::{address_name}")
+            else:
+                address_name = address_dict.get(person_nums, '')
+                person_address_list.append(f"{person_name}::{address_name}")
 
-            return ';;'.join(person_address_list)
+        return ';;'.join(person_address_list)
 
-        # 使用 apply 逐行处理
-        return person_col.combine(org_col, process_row)
-
-    def obtain_data_from_hbase(self):
+    def obtain_data_analysis_from_hbase(self):
+        """
+        从hbase中读取数据，并进行作者，地址清洗
+        :return:
+        """
         # 使用 DataFrame 读取数据
         # TODO
         table_query_format = f"""
-        SELECT ID, "author", "org", "year" FROM SCIENCE.SCIENCE_ARTICLE_METADATA
+        SELECT "third_id", "author", "org", "year" FROM SCIENCE.RAW_WEIPU_ARTICLE_METADATA
         WHERE "school_id" = '{self._school_id}' 
         """
         # table_query = table_query_format.replace(":school_id", str(self._school_id))
@@ -110,24 +219,38 @@ class weipuRosterAnalysis:
             .option("driver", "org.apache.phoenix.jdbc.PhoenixDriver") \
             .load()
 
+        print("-------------------------------------------hbase维普原始数据---------------------------------------------")
         df.show(truncate=False)
 
+        # df_concat_person_address = df.withColumn("concat_person_address", concat_ws("|+|", col("author"), col("org")))
+
         # 格式化学者机构
-        df_format_person_org = df.withColumn("format_person_org", self.format_row_pandas_udf(df["author"], df["org"]))
+        format_person_address_udf = udf(self.format_person_address, StringType())
+        df_format_person_address = df.withColumn("format_person_address", format_person_address_udf(
+                                                                           col("author"), col("org")))
 
         # 行转列
-        df_explode_person_org = df_format_person_org.withColumn('person_org_rows', explode(split(col("format_person_org"), ';;')))
+        df_explode_person_address = df_format_person_address.withColumn('person_address_rows', explode(
+                                                                        split(col("format_person_address"), ';;')))
 
         # 分割多列
-        df_split_person_org = df_explode_person_org.withColumn('name_str', split("person_org_rows", '::').getItem(0)). \
-            withColumn('address_str', split('person_org_rows', '::').getItem(1))
+        df_split_person_address = df_explode_person_address.withColumn('name_str',
+                                                                       split("person_address_rows", '::').getItem(0)). \
+            withColumn('address_str', split('person_address_rows', '::').getItem(1))
 
-        df_result = df_split_person_org.select(col('ID').alias("third_id"), 'name_str', 'address_str', 'year')
-        self.write_data_to_hbase(df_result)
+        df_result = df_split_person_address.select('third_id', 'name_str', 'address_str', 'year')
 
-    def write_data_to_hbase(self, df):
+        self.init_analysis_data_to_hbase(df_result)
+
+    def init_analysis_data_to_hbase(self, df):
+        """
+        生成的初始化作者地址表
+        :param df:
+        :return:
+        """
         # 生成唯一键
-        df_row_key = df.withColumn('id', sha2(concat_ws('||', col('name_str'), col('address_str'), col('year')), 256))
+        # df_row_key = df.withColumn('id', sha2(concat_ws('||', col('name_str'), col('address_str'), col('year')), 256))
+        df_row_key = df.withColumn('id', md5(concat_ws('||', df['name_str'], df['address_str'], df['year'])))
         df_result = df_row_key.select(
             col('id').alias('"id"'),
             col('third_id').alias('"third_id"'),
@@ -136,7 +259,7 @@ class weipuRosterAnalysis:
             col('year').alias('"year"')
         )
         #
-        print(df_result.columns)
+        print("-------------------------------------生成的初始化作者地址表---------------------------------------------")
         df_result.show(truncate=False)
 
         # # 将格式化后的数据缓存，后续做清洗
@@ -144,26 +267,13 @@ class weipuRosterAnalysis:
         #
         # df_result.write.format("phoenix").mode('append') \
         #     .option("zkUrl", "hadoop01,hadoop02,hadoop03:2181") \
-        #     .option("table", 'SCIENCE.WEIPU_AUTHOR_ORG_MEDIATE_TABLE') \
+        #     .option("table", 'SCIENCE.WEIPU_AUTHOR_ADDRESS_MEDIATE_TABLE') \
         #     .option("driver", "org.apache.phoenix.jdbc.PhoenixDriver") \
         #     .save()
 
-        self.obtain_school_form_org(df_result)
+        self.obtain_school_form_address(df_result)
 
-    @staticmethod
-    def filter_address(broadcast_not_school_list, address_str):
-        """
-        排除不符合条件的学校
-        :param broadcast_not_school_list:
-        :param address_str:
-        :return:
-        """
-        for not_name in broadcast_not_school_list.value:
-            if not_name in address_str:
-                return False
-        return True
-
-    def obtain_school_form_org(self, df: DataFrame):
+    def obtain_school_form_address(self, df: DataFrame):
         """
         过滤学校地址，从地址中解析出对应机构
         :param df:
@@ -177,23 +287,72 @@ class weipuRosterAnalysis:
             # 广播变量
             broadcast_not_school_list = spark.sparkContext.broadcast(not_school_list)
             filter_school_udf = udf(
-                lambda address: self.filter_address(broadcast_not_school_list, address), BooleanType())
+                lambda address: filter_address(broadcast_not_school_list, address), BooleanType())
 
-            df_filter = df_school.filter(filter_school_udf(col("address_str")))
+            df_filter = df_school.filter(filter_school_udf(col('"address_str"')))
         else:
             df_filter = df_school
         df_result = df_filter.withColumn('"school_id"', lit(self._school_id))
+        print("-----------------------------------过滤学校地址，从地址中解析出对应机构---------------------------------------")
         df_result.show(truncate=False)
+
+
         # df_result.write.format('phoenix').mode('append') \
         #     .option("zkUrl", "hadoop01,hadoop02,hadoop03:2181") \
-        #     .option("table", "SCIENCE.WEIPU_AUTHOR_ORG_FINAL_TABLE") \
+        #     .option("table", "SCIENCE.WEIPU_AUTHOR_ADDRESS_FINAL_TABLE") \
         #     .option("driver", "org.apache.phoenix.jdbc.PhoenixDriver") \
         #     .save()
 
+        # 解析二级机构
+        self.analysis_org_from_address(df_result)
 
-    def write_school_final_org_to_hbase(self, df):
-        # 生成唯一键
-        df_row_key = df.withColumn('"id"', sha2(concat_ws('||', col('name_str'), col('address_str'), col('year')), 256))
+    def analysis_org_from_address(self, df):
+        org_alias_name_dict = self.org_alias_name_from_mysql()
+        print(org_alias_name_dict)
+        broadcast_org_alias_name_dict = spark.sparkContext.broadcast(org_alias_name_dict)
+
+        # # 定义 UDF
+        # def udf_analysis_org(address):
+        #     return self.analysis_org(broadcast_org_alias_name_dict, address)
+        #
+        # analysis_org_udf = udf(udf_analysis_org, StringType())
+
+        analysis_org_udf = udf(
+            lambda address: analysis_org(broadcast_org_alias_name_dict, address), StringType())
+        print("-------------------------解析出最终机构------------------------")
+        df_other_second_org_list = df.withColumn('"second_name_list"', analysis_org_udf(col('"address_str"')))
+        df_other_second_org_list.show(truncate=False)
+
+        # 将二级机构行转列
+        df_explode_other_second_org = df_other_second_org_list.withColumn('"other_second_org_str"',
+                                                                          explode(split(col('"second_name_list"'), ';;')))
+
+        df_other_second_org = df_explode_other_second_org.select('"id"', '"third_id"', '"name_str"',
+                                                                 '"year"', '"school_id"', '"other_second_org_str"')
+
+        # 重新生成唯一id
+        df_other_second_org_id = df_other_second_org.withColumn('"id"', md5(
+            concat_ws('||', col('"name_str"'), col('"year"'), col('"school_id"'), col('"other_second_org_str"'))))
+
+        # 过滤姓名和机构为空的
+        df_other_second_org_filter = df_other_second_org_id.filter((df_other_second_org['"name_str"'] != '') &
+                                                                   (df_other_second_org[
+                                                                        '"other_second_org_str"'] != ''))
+        # 将其他机构映射到二级机构上
+        other_org_to_second_udf = udf(
+            lambda org: other_org_to_second(broadcast_org_alias_name_dict, org), StringType())
+
+        df_second_org = df_other_second_org_filter.withColumn('"second_org_str"',
+                                                              other_org_to_second_udf(col('"other_second_org_str"')))
+
+        df_second_org_updated_time = df_second_org.withColumn('"updated_time"', lit(datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+        df_second_org_updated_time.show(truncate=False, n=100)
+
+        df_second_org_updated_time.write.format('phoenix').mode('append') \
+            .option("zkUrl", "hadoop01,hadoop02,hadoop03:2181") \
+            .option("table", "SCIENCE.WEIPU_AUTHOR_ORG_RESULT_TABLE") \
+            .option("driver", "org.apache.phoenix.jdbc.PhoenixDriver") \
+            .save()
 
 
 if __name__ == '__main__':
@@ -206,8 +365,8 @@ if __name__ == '__main__':
 # .config("spark.jars", "/export/server/phoenix/phoenix-client-embedded-hbase-2.5-5.2.0.jar")
 
     weipuRosterAnalysis(
-        school_name='西安建筑科技大学',
-        school_id='168'
-    ).obtain_data_from_hbase()
+        school_name='中国人民大学',
+        school_id='88'
+    ).obtain_data_analysis_from_hbase()
     spark.catalog.clearCache()
     spark.stop()
