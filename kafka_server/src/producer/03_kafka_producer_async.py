@@ -2,7 +2,9 @@
 # @File : 02_kafka_producer_async.py
 # author: LiuYiJie
 # Time：2025/2/24
-
+"""
+生产者异步发送消息
+"""
 from kafka import KafkaProducer
 from kafka.errors import KafkaError
 

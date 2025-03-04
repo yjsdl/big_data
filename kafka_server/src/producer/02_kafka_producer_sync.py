@@ -2,7 +2,9 @@
 # @File : 02_kafka_producer_sync.py
 # author: LiuYiJie
 # Time：2025/2/24
-
+"""
+生产者同步发送消息
+"""
 from kafka import KafkaProducer
 from kafka.errors import KafkaError
 

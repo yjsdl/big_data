@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 # @date：2025/2/19 16:21
 # @Author：LiuYiJie
-# @file： 01_kafka_consumer
+# @file： 01_kafka_consumer_auto_commit
 """
-kafka消费者
+消费者自动提交消息偏移量
 """
 from kafka import KafkaConsumer
 
@@ -11,9 +11,11 @@ from kafka import KafkaConsumer
 def kafka_consumer_test():
     # 创建kafkaConsumer
     consumer = KafkaConsumer(
-        'testTopic', 'testTopic01',  # 同时消费多个topic
+        'testTopic',  # 同时消费多个topic
         bootstrap_servers=['hadoop01:9092', 'hadoop02:9092', 'hadoop03:9092'],
-        group_id='group_1'
+        group_id='group_1',  # 消费组，里面有消息偏移量信息
+        enable_auto_commit=True,  # 自动提交偏移量
+        auto_commit_interval_ms=1000,  # 自动提交偏移量间隔时间
     )
 
     # 获取消费数据
