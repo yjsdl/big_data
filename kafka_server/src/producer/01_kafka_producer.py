@@ -8,7 +8,10 @@ from kafka import KafkaProducer
 def kafka_producer_test():
     # 创建kafkaProducer
     kafkaProducer = KafkaProducer(
-        bootstrap_servers=['hadoop01:9092', 'hadoop02:9092', 'hadoop03:9092']
+        bootstrap_servers=['hadoop01:9092', 'hadoop02:9092', 'hadoop03:9092'],
+        acks=-1,
+        linger_ms=1,  # 消息发送延迟时间
+        batch_size=32 * 1024  # 设置一批消息数据大小为32k
     )
 
     # 执行数据发送(生产)
