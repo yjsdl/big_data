@@ -3,15 +3,14 @@
 # @Author：LiuYiJie
 # @file： weipu_roster_analysis
 """
-通过spark读取phoenix映射的hbase表
+通过spark读取phoenix映射的hbase表，并对作者地址进行解析，生成标准别名表
 """
 import json
 import re
-from pyspark.sql import SparkSession
+from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql.functions import pandas_udf
-from pyspark.sql.types import StringType, BooleanType
+from pyspark.sql.types import StringType, BooleanType, ArrayType
 from pyspark.sql.functions import explode, split, col, concat_ws, sha2, udf, lit, md5, broadcast
-from pyspark.sql import DataFrame
 from datetime import datetime
 from pyspark.storagelevel import StorageLevel
 
@@ -60,7 +59,7 @@ def analysis_org(broadcast_org_alias_name_dict, address_str):
         if address_slice_str == '':
             break
 
-    return ';;'.join(org_list)
+    return org_list
 
 
 def other_org_to_second(broadcast_org_alias_name_dict, org_str):
@@ -86,7 +85,7 @@ class weipuRosterAnalysis:
 
     def ai_dic_not_school_from_mysql(self):
         table_query = f"""
-             select school_id, school_name, not_school_name, condition1 from ai_dic_not_school 
+             select school_id, school_name, not_school_name, condition1, condition2 from ai_dic_not_school 
              where school_name = '{self._school_name}'
         """
         df = spark.read.format('jdbc') \
@@ -98,7 +97,10 @@ class weipuRosterAnalysis:
         print('--------------------------------------------学校排除策略------------------------------------------------')
         df.show()
         # 学校排除策略
-        not_school_list = [row['condition1'] for row in df.collect()]
+        not_school_lists = [[row['not_school_name'], row['condition1'], row['condition2']] for row in df.collect()]
+
+        not_school_list = [item for item_list in not_school_lists for item in item_list if item is not None]
+        print(not_school_list)
         return not_school_list
 
     def org_alias_name_from_mysql(self):
@@ -153,10 +155,10 @@ class weipuRosterAnalysis:
             pattern = r'\（.*?\）'
             person_name_str = re.sub(pattern, '', raw_person_name_str)
             for s in ['（特约专家）', '（指导老师）', '（辅导老师）', '（指导专家）', '指导专家/', '（整理者）', '（评论）', '（摘译）', '（审校）', '（综述）', '（口述）',
-                      '（整理）', '等、', '等', '《西安建筑科技大学学报》编辑部', '西安建筑科技大学学报编辑部', '编者', '本刊记者',
+                      '（整理）', '等、', '等', '《西安建筑科技大学学报》编辑部', '西安建筑科技大学学报编辑部', '编者', '本刊记者', '指导老师',
                       '（设计/撰文）', '（文/图）', '（插图）', '（指导）', '（图/文）', '（点评）', '（编译）', '（译）', '（校）', '（综述', '（图）', '通信作者']:
                 person_name_str = person_name_str.replace(s, '')
-            person_name_str.strip(*[',，；;。']).lower()
+            person_name_str.strip(*[',，；;。：']).lower()
             for k in ['课题组', "专家组", "编辑部", "实验室", "测试组", "论坛", "委员会", "专员", "编者", "评论员"]:
                 if k in person_name_str:
                     person_name_str = ''
@@ -164,12 +166,10 @@ class weipuRosterAnalysis:
                 person_name_str = ''
             return person_name_str
 
-        # person_str = person_address_str.split("|+|")[0]
-        # address_str = person_address_str.split("|+|")[1]
         if not address_str or not person_str:
             return ''
         person_list = person_str.split(';')
-        person_address_list = []
+        person_address_lists = []
         address_list = address_str.split(';')
         address_dict = {}
         for address in address_list:
@@ -188,16 +188,16 @@ class weipuRosterAnalysis:
                 person_nums = person.split('[')[1].strip(*['] 。'])
             except IndexError:
                 person_nums = ''
-            if ',' in person_nums:
-                person_num_list = person_nums.split(',')
-                for person_num in person_num_list:
-                    address_name = address_dict.get(person_num, '')
-                    person_address_list.append(f"{person_name}::{address_name}")
-            else:
-                address_name = address_dict.get(person_nums, '')
-                person_address_list.append(f"{person_name}::{address_name}")
+            person_num_list = person_nums.split(',') if ',' in person_nums else [person_nums]
 
-        return ';;'.join(person_address_list)
+            for person_num in person_num_list:
+                person_address_name_list = []
+                address_name = address_dict.get(person_num, '')
+                person_address_name_list.append(person_name)
+                person_address_name_list.append(address_name)
+                person_address_lists.append(person_address_name_list)
+
+        return person_address_lists
 
     def obtain_data_analysis_from_hbase(self):
         """
@@ -222,24 +222,23 @@ class weipuRosterAnalysis:
         print("-------------------------------------------hbase维普原始数据---------------------------------------------")
         df.show(truncate=False)
 
-        # df_concat_person_address = df.withColumn("concat_person_address", concat_ws("|+|", col("author"), col("org")))
-
         # 格式化学者机构
-        format_person_address_udf = udf(self.format_person_address, StringType())
+        format_person_address_udf = udf(self.format_person_address, ArrayType(ArrayType(StringType())))
         df_format_person_address = df.withColumn("format_person_address", format_person_address_udf(
                                                                            col("author"), col("org")))
 
         # 行转列
-        df_explode_person_address = df_format_person_address.withColumn('person_address_rows', explode(
-                                                                        split(col("format_person_address"), ';;')))
+        df_explode_person_address = df_format_person_address.\
+            withColumn('person_address_rows', explode(col("format_person_address")))
 
         # 分割多列
-        df_split_person_address = df_explode_person_address.withColumn('name_str',
-                                                                       split("person_address_rows", '::').getItem(0)). \
-            withColumn('address_str', split('person_address_rows', '::').getItem(1))
+        df_split_person_address = df_explode_person_address.\
+            withColumn('name_str', col("person_address_rows").getItem(0)). \
+            withColumn('address_str', col('person_address_rows').getItem(1))
 
         df_result = df_split_person_address.select('third_id', 'name_str', 'address_str', 'year')
 
+        df_result.show(truncate=False)
         self.init_analysis_data_to_hbase(df_result)
 
     def init_analysis_data_to_hbase(self, df):
@@ -318,14 +317,14 @@ class weipuRosterAnalysis:
         # analysis_org_udf = udf(udf_analysis_org, StringType())
 
         analysis_org_udf = udf(
-            lambda address: analysis_org(broadcast_org_alias_name_dict, address), StringType())
+            lambda address: analysis_org(broadcast_org_alias_name_dict, address), ArrayType(StringType()))
         print("-------------------------解析出最终机构------------------------")
         df_other_second_org_list = df.withColumn('"second_name_list"', analysis_org_udf(col('"address_str"')))
         df_other_second_org_list.show(truncate=False)
 
         # 将二级机构行转列
         df_explode_other_second_org = df_other_second_org_list.withColumn('"other_second_org_str"',
-                                                                          explode(split(col('"second_name_list"'), ';;')))
+                                                                          explode(col('"second_name_list"')))
 
         df_other_second_org = df_explode_other_second_org.select('"id"', '"third_id"', '"name_str"',
                                                                  '"year"', '"school_id"', '"other_second_org_str"')
@@ -365,8 +364,8 @@ if __name__ == '__main__':
 # .config("spark.jars", "/export/server/phoenix/phoenix-client-embedded-hbase-2.5-5.2.0.jar")
 
     weipuRosterAnalysis(
-        school_name='中国人民大学',
-        school_id='88'
+        school_name='四川师范大学',
+        school_id='154'
     ).obtain_data_analysis_from_hbase()
     spark.catalog.clearCache()
     spark.stop()
