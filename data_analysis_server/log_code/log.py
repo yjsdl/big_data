@@ -9,7 +9,7 @@ import os
 from os.path import dirname, abspath, join
 import logging
 from logging import handlers
-import hbase_server.setting as setting
+import data_analysis_server.setting as setting
 import datetime
 
 

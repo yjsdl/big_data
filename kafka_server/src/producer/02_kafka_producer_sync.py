@@ -7,6 +7,8 @@
 """
 from kafka import KafkaProducer
 from kafka.errors import KafkaError
+import time
+import json
 
 
 def kafka_producer_test():
@@ -19,7 +21,11 @@ def kafka_producer_test():
 
     # 同步发送
     try:
-        record_metadata = kafkaProducer.send(topic='testTopic', value=f'123'.encode('utf-8')).get()
+        for i in range(2100, 2200):
+            # time.sleep(1)
+            value = {"id": i, "name": f"赵六{i}"}
+            data = json.dumps(value, ensure_ascii=False)
+            record_metadata = kafkaProducer.send(topic='testTopic', value=data.encode('utf-8')).get()
     except KafkaError:
         print('生产数据，出现异常(说明是重试多次后还是发送失败)')
     finally:

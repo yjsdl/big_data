@@ -15,17 +15,52 @@ from datetime import datetime
 from pyspark.storagelevel import StorageLevel
 
 
-def filter_address(broadcast_not_school_list, address_str):
+def filter_address(broadcast_school_strategy_dict, address_str):
     """
     排除不符合条件的学校
-    :param broadcast_not_school_list:
+    :param broadcast_school_strategy_dict:
     :param address_str:
-    :return:
+    :return: true: 不排除当前地址，false:排除当前地址
     """
-    for not_name in broadcast_not_school_list.value:
-        if not_name in address_str:
-            return False
-    return True
+    if not address_str:
+        return False
+
+    broadcast_school_strategy_dict_value = broadcast_school_strategy_dict.value
+    dic_school_list = broadcast_school_strategy_dict_value.get('dic_school_list', [])
+    dic_not_school_list = broadcast_school_strategy_dict_value.get('dic_not_school_list', [])
+
+    # 1.地址经过判断策略验证，验证通过=进行下一步，验证不通过=非本校地址
+    is_school_flag = False
+    for ai_dic_school in dic_school_list:
+        condition1 = ai_dic_school['condition1']
+        condition2 = ai_dic_school['condition2']
+        if condition1 in address_str:
+            if condition2 is None:
+                is_school_flag = True
+            else:
+                is_school_flag = condition2 in address_str
+        if is_school_flag:
+            break
+
+    if is_school_flag:
+        # 1.地址经过判断策略，如果通过判断策略验证是本校地址，添加排除策略验证
+        # 如果地址包含了排除策略的内容，那就非本校地址
+        # 默认地址不通过排除策略验证
+        exclude_flag = False
+        for ai_dic_not_school in dic_not_school_list:
+            condition1 = ai_dic_not_school['condition1']
+            condition2 = ai_dic_not_school['condition2']
+            if condition1 in address_str:
+                if condition2 is None:
+                    exclude_flag = True
+                else:
+                    exclude_flag = condition2 in address_str
+            if exclude_flag:
+                break
+        if exclude_flag:
+            is_school_flag = False
+    
+    return is_school_flag
 
 
 def analysis_org(broadcast_org_alias_name_dict, address_str):
@@ -35,7 +70,6 @@ def analysis_org(broadcast_org_alias_name_dict, address_str):
     :param address_str:
     :return:
     """
-    # broadcast_org_alias_name_dict = json.loads(broadcast_org_alias_name_str.value)
     org_name_list = broadcast_org_alias_name_dict.value.get('org_name', [])
     alias_name_format_list = broadcast_org_alias_name_dict.value.get('alias_name', [])
     alias_org_name_dict = broadcast_org_alias_name_dict.value.get('split_alias_org_name_dict', {})
@@ -85,8 +119,20 @@ class weipuRosterAnalysis:
 
     def ai_dic_not_school_from_mysql(self):
         table_query = f"""
-             select school_id, school_name, not_school_name, condition1, condition2 from ai_dic_not_school 
-             where school_name = '{self._school_name}'
+            (
+            SELECT ads.condition1, ads.condition2
+            FROM ai_dic_school ads
+            JOIN ai_dic_not_school adns
+            ON ads.school_name = adns.not_school_name
+            AND adns.school_id = '{self._school_id}'
+            )
+            UNION ALL
+            (
+            SELECT condition1, condition2
+            FROM ai_dic_not_school
+            WHERE school_id = '{self._school_id}'
+            AND (condition1 IS NOT NULL OR condition2 IS NOT NULL )
+            )
         """
         df = spark.read.format('jdbc') \
             .option('url', self._mysql_url) \
@@ -97,11 +143,27 @@ class weipuRosterAnalysis:
         print('--------------------------------------------学校排除策略------------------------------------------------')
         df.show()
         # 学校排除策略
-        not_school_lists = [[row['not_school_name'], row['condition1'], row['condition2']] for row in df.collect()]
+        dic_not_school_list = df.collect()
+        print(dic_not_school_list)
+        return dic_not_school_list
 
-        not_school_list = [item for item_list in not_school_lists for item in item_list if item is not None]
-        print(not_school_list)
-        return not_school_list
+    def ai_dic_school_from_mysql(self):
+        table_query = f"""
+             select school_id, school_name, condition1, condition2 from ai_dic_school 
+             where school_id = '{self._school_id}'
+        """
+        df = spark.read.format('jdbc') \
+            .option('url', self._mysql_url) \
+            .option('query', table_query) \
+            .option('user', 'science-read') \
+            .option('password', 'readkcidea') \
+            .load()
+        print('--------------------------------------------学校判断策略------------------------------------------------')
+        df.show()
+        # 学校排除策略
+        dic_school_lists = df.collect()
+        print(dic_school_lists)
+        return dic_school_lists
 
     def org_alias_name_from_mysql(self):
         table_query = f"""
@@ -152,14 +214,15 @@ class weipuRosterAnalysis:
     def format_person_address(person_str, address_str):
         def replace_special_char(raw_person_name: str):
             raw_person_name_str = raw_person_name.replace('(', '（').replace(')', '）').replace('\\', '/')
-            pattern = r'\（.*?\）'
+            pattern = r'\d|\（.*?\）'
             person_name_str = re.sub(pattern, '', raw_person_name_str)
             for s in ['（特约专家）', '（指导老师）', '（辅导老师）', '（指导专家）', '指导专家/', '（整理者）', '（评论）', '（摘译）', '（审校）', '（综述）', '（口述）',
                       '（整理）', '等、', '等', '《西安建筑科技大学学报》编辑部', '西安建筑科技大学学报编辑部', '编者', '本刊记者', '指导老师',
                       '（设计/撰文）', '（文/图）', '（插图）', '（指导）', '（图/文）', '（点评）', '（编译）', '（译）', '（校）', '（综述', '（图）', '通信作者']:
-                person_name_str = person_name_str.replace(s, '')
-            person_name_str.strip(*[',，；;。：']).lower()
-            for k in ['课题组', "专家组", "编辑部", "实验室", "测试组", "论坛", "委员会", "专员", "编者", "评论员"]:
+                person_name_str = person_name_str.replace(s, '').replace('•', '·')
+            person_name_str.strip(*[',，；;。：.']).lower()
+            for k in ['课题组', "专家组", "编辑部", "实验室", "测试组", "论坛", "委员会", "专员", "编者", "评论员", '调研组', '工作组', '协作组',
+                      '办公室', '合作组']:
                 if k in person_name_str:
                     person_name_str = ''
             if len(person_name_str) == 1:
@@ -180,7 +243,7 @@ class weipuRosterAnalysis:
                 address_name = ''
             address_dict[address_num] = address_name
 
-        for person in person_list:
+        for person in person_list[:1]:
             person_name = person.split('[')[0].strip(*['。 '])
             # 处理一些名字中的脏数据
             person_name = replace_special_char(person_name)
@@ -220,7 +283,7 @@ class weipuRosterAnalysis:
             .load()
 
         print("-------------------------------------------hbase维普原始数据---------------------------------------------")
-        df.show(truncate=False)
+        # df.show(truncate=False)
 
         # 格式化学者机构
         format_person_address_udf = udf(self.format_person_address, ArrayType(ArrayType(StringType())))
@@ -238,7 +301,7 @@ class weipuRosterAnalysis:
 
         df_result = df_split_person_address.select('third_id', 'name_str', 'address_str', 'year')
 
-        df_result.show(truncate=False)
+        # df_result.show(truncate=False)
         self.init_analysis_data_to_hbase(df_result)
 
     def init_analysis_data_to_hbase(self, df):
@@ -259,7 +322,7 @@ class weipuRosterAnalysis:
         )
         #
         print("-------------------------------------生成的初始化作者地址表---------------------------------------------")
-        df_result.show(truncate=False)
+        # df_result.show(truncate=False)
 
         # # 将格式化后的数据缓存，后续做清洗
         # df_result.persist(storageLevel=StorageLevel.MEMORY_AND_DISK)
@@ -274,26 +337,26 @@ class weipuRosterAnalysis:
 
     def obtain_school_form_address(self, df: DataFrame):
         """
-        过滤学校地址，从地址中解析出对应机构
+        通过判断策略和排除策略， 过滤学校地址
         :param df:
         :return:
         """
         # TODO
-        df_school = df.select('"id"', '"third_id"', '"name_str"', '"address_str"', '"year"').filter(col('"address_str"').contains(self._school_name))
-        not_school_list = self.ai_dic_not_school_from_mysql()
-        if not_school_list:
+        df_school = df.select('"id"', '"third_id"', '"name_str"', '"address_str"', '"year"')
+        dic_school_list = self.ai_dic_school_from_mysql()
+        dic_not_school_list = self.ai_dic_not_school_from_mysql()
+        school_strategy_dict = dict(dic_school_list=dic_school_list, dic_not_school_list=dic_not_school_list)
 
-            # 广播变量
-            broadcast_not_school_list = spark.sparkContext.broadcast(not_school_list)
-            filter_school_udf = udf(
-                lambda address: filter_address(broadcast_not_school_list, address), BooleanType())
+        # 广播变量
+        broadcast_school_strategy_dict = spark.sparkContext.broadcast(school_strategy_dict)
+        filter_school_udf = udf(
+            lambda address: filter_address(broadcast_school_strategy_dict, address), BooleanType())
 
-            df_filter = df_school.filter(filter_school_udf(col('"address_str"')))
-        else:
-            df_filter = df_school
-        df_result = df_filter.withColumn('"school_id"', lit(self._school_id))
-        print("-----------------------------------过滤学校地址，从地址中解析出对应机构---------------------------------------")
-        df_result.show(truncate=False)
+        df_school_filter = df_school.filter(filter_school_udf(col('"address_str"')))
+
+        df_result = df_school_filter.withColumn('"school_id"', lit(self._school_id))
+        print("-----------------------------------过滤学校地址，排除非本校地址---------------------------------------")
+        # df_result.show(n=5, truncate=False)
 
 
         # df_result.write.format('phoenix').mode('append') \
@@ -320,7 +383,7 @@ class weipuRosterAnalysis:
             lambda address: analysis_org(broadcast_org_alias_name_dict, address), ArrayType(StringType()))
         print("-------------------------解析出最终机构------------------------")
         df_other_second_org_list = df.withColumn('"second_name_list"', analysis_org_udf(col('"address_str"')))
-        df_other_second_org_list.show(truncate=False)
+        # df_other_second_org_list.show(truncate=False)
 
         # 将二级机构行转列
         df_explode_other_second_org = df_other_second_org_list.withColumn('"other_second_org_str"',
@@ -345,27 +408,28 @@ class weipuRosterAnalysis:
                                                               other_org_to_second_udf(col('"other_second_org_str"')))
 
         df_second_org_updated_time = df_second_org.withColumn('"updated_time"', lit(datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-        df_second_org_updated_time.show(truncate=False, n=100)
+        # df_second_org_updated_time.show(truncate=False, n=100)
 
         df_second_org_updated_time.write.format('phoenix').mode('append') \
             .option("zkUrl", "hadoop01,hadoop02,hadoop03:2181") \
             .option("table", "SCIENCE.WEIPU_AUTHOR_ORG_RESULT_TABLE") \
             .option("driver", "org.apache.phoenix.jdbc.PhoenixDriver") \
+            .option("batchsize", 5000)\
             .save()
 
 
 if __name__ == '__main__':
     # 初始化 SparkSession
     spark = SparkSession.builder \
-        .appName("Read Phoenix Table") \
+        .appName("weipu roster analysis") \
         .master("yarn") \
         .getOrCreate()
 # .config("spark.jars", "/export/server/spark/jars/phoenix5-spark3-shaded-6.0.0.7.2.17.0-334.jar")
 # .config("spark.jars", "/export/server/phoenix/phoenix-client-embedded-hbase-2.5-5.2.0.jar")
 
     weipuRosterAnalysis(
-        school_name='四川师范大学',
-        school_id='154'
+        school_name='新疆大学',
+        school_id='1612271517553397761'
     ).obtain_data_analysis_from_hbase()
     spark.catalog.clearCache()
     spark.stop()

@@ -3,12 +3,12 @@
 # @Author：LiuYiJie
 # @file： phoenix_insert_article
 import jaydebeapi
-from hbase_server.log_code.log import logger
 from queue import Queue
 
 
 class PhoenixConnectionPool:
-    def __init__(self, size, driver_driver=None, jdbc_url=None, driver_jars=None, driver_config=None):
+    def __init__(self, size, logger=None, driver_driver=None, jdbc_url=None, driver_jars=None, driver_config=None):
+        self.logger = logger
         self.size = size
         self.queue = Queue(maxsize=size)
         for _ in range(size):
@@ -22,14 +22,15 @@ class PhoenixConnectionPool:
         self.queue.put(conn)
 
     def close_all(self):
-        logger.info('执行结束，关闭所有phoenix连接')
+        self.logger.info('执行结束，关闭所有phoenix连接')
         while not self.queue.empty():
             conn = self.queue.get()
             conn.close()
 
 
 class phoenixServer:
-    def __init__(self):
+    def __init__(self, logger=None):
+        self.logger = logger
         # JDBC 驱动路径
         # 注意驱动路径中不能包含中文
         phoenix_jars = [
@@ -46,7 +47,7 @@ class phoenixServer:
         driver_driver = 'org.apache.phoenix.jdbc.PhoenixDriver'
         # 建立连接
         # 创建连接池
-        self.pool = PhoenixConnectionPool(size=2, driver_driver=driver_driver, jdbc_url=jdbc_url,
+        self.pool = PhoenixConnectionPool(size=2, logger=logger, driver_driver=driver_driver, jdbc_url=jdbc_url,
                                           driver_jars=phoenix_jars, driver_config=driver_config)
 
         # self.conn = jaydebeapi.connect(driver_class, jdbc_url, driver_config, phoenix_jar)
@@ -66,7 +67,7 @@ class phoenixServer:
         finally:
             cursor.close()
             self.pool.release_connection(conn)
-            logger.info(data_lists)
+            self.logger.info(data_lists)
             return data_lists
 
     def upsert_one(self, sql, data: tuple):

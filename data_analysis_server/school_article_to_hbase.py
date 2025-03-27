@@ -11,7 +11,7 @@ from typing import List, Union
 import os
 import json
 import data_analysis_server.setting as log_setting
-from hbase_server.phoenix_operate import phoenixServer
+from data_analysis_server.phoenix_operate import phoenixServer
 
 
 filename = r'Z:\需求文档\代码\science-data-upload\science_data_upload\_base\school_sid.json'
@@ -47,7 +47,7 @@ class exportIncrementData:
                          'issue': '期', 'issn': 'ISSN号', 'cn': 'CN号', 'page': '页码', 'keyword': '关键词',
                          'classification_code': '分类号',
                          'abstract': '文摘', 'url': '网址'}
-        self._phoenix_server = phoenixServer()
+        self._phoenix_server = phoenixServer(logger=logger)
 
     @property
     def client(self):
@@ -169,7 +169,7 @@ if __name__ == '__main__':
         single_school=True,
         # collection='relation_subject_weipu',
         query_field='school_name',
-        query_value='中国人民大学',
-        year=list(range(1990, 2024))
+        query_value='南京中医药大学',
+        year=list(range(1990, 2026))
     )
     c.run()
