@@ -4,6 +4,7 @@
 # @file： phoenix_insert_article
 import jaydebeapi
 from queue import Queue
+from typing import List
 
 
 class PhoenixConnectionPool:
@@ -85,7 +86,7 @@ class phoenixServer:
             cursor.close()
             return state
 
-    def upsert_many(self, sql, data: list):
+    def upsert_many(self, sql, data: List[tuple]):
         state = False
         conn = self.pool.get_connection()
         cursor = conn.cursor()

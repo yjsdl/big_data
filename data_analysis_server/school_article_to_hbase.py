@@ -110,15 +110,16 @@ class exportIncrementData:
 
         collection = self.db.get_collection(self._collection)
         cursor = collection.aggregate(pipeline)
-        data_list = []
+        data_id_list = []
         success_data = []
         error_data = []
+        result_list = []
 
         for data in cursor:
             customer_info = data.get('article_detail')
             for article in customer_info:
                 third_id = article.get('third_id')
-                data_list.append(third_id)
+                data_id_list.append(third_id)
                 article_data = article.get('exported')
                 article_data['volum'] = str(article_data["volum"])
                 article_data_list = list(article_data.values())
@@ -129,14 +130,25 @@ class exportIncrementData:
                 article_data_list.append(self._school_id)
                 article_data_list.append(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
                 article_data_tuple = tuple(article_data_list)
-                sql = """upsert into SCIENCE.RAW_WEIPU_ARTICLE_METADATA values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"""
-                data_state = self._phoenix_server.upsert_one(sql, article_data_tuple)
-                if data_state:
-                    success_data.append(third_id)
-                else:
-                    error_data.append(third_id)
+                result_list.append(article_data_tuple)
+        for i in range(0, len(result_list), 1000):
+            article_list = result_list[i:i+1000]
+
+            sql = """upsert into SCIENCE.RAW_WEIPU_ARTICLE_METADATA values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"""
+            # 批量提交1000条，如果出错，一条一条提交
+            data_state = self._phoenix_server.upsert_many(sql, article_list)
+
+            if data_state:
+                success_data.extend(data_id_list[i: i+1000])
+            else:
+                for article_tuple in article_list:
+                    data_state = self._phoenix_server.upsert_one(sql, article_tuple)
+                    if data_state:
+                        success_data.append(article_tuple[1])
+                    else:
+                        error_data.append(article_tuple[1])
         logger.info(
-            f'当前学校{self._query_value} - {filter_year}年 - 导出发文{len(data_list)}条 - '
+            f'当前学校{self._query_value} - {filter_year}年 - 导出发文{len(data_id_list)}条 - '
             f'成功{len(success_data)} - 失败{len(error_data)}')
         logger.info(f'失败id为 - {error_data}')
 
@@ -169,7 +181,7 @@ if __name__ == '__main__':
         single_school=True,
         # collection='relation_subject_weipu',
         query_field='school_name',
-        query_value='南京中医药大学',
+        query_value='江苏大学',
         year=list(range(1990, 2026))
     )
     c.run()
