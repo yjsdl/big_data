@@ -7,7 +7,7 @@
 """
 import re
 import json
-from bson import ObjectId
+import bson
 from pyspark.sql import SparkSession
 from pyspark.sql.types import StringType, ArrayType
 from pyspark.sql.functions import md5, udf, col, split, explode
@@ -48,13 +48,13 @@ class weipuDataAnalysis:
             except IndexError:
                 address_name = ''
             address_tag_dict[address_tag] = address_name
-            address_id_dict[address_name] = str(ObjectId())
+            address_id_dict[address_name] = str(bson.ObjectId())
             address_order_list.append({'id': address_id_dict.get(address_name, ''), 'authorName': address_name,
                                        'number': address_order, 'repNumber': '', 'repTag': '', 'sourceType': 3})
 
         for author in author_list:
             author_name = author.split('[')[0].strip(*['。 '])
-            author_id_dict[author_name] = str(ObjectId())
+            author_id_dict[author_name] = str(bson.ObjectId())
 
             author_order = author_list.index(author) + 1
             # 处理一些名字中的脏数据
@@ -89,7 +89,7 @@ class weipuDataAnalysis:
         keyword_list = re.split("[;；%]", keyword_str)
         keyword_lists = [re.sub(r"(\[.*?\])", "", one) for one in keyword_list]
         for keyword in keyword_lists:
-            keyword_id_list.append({'id': str(ObjectId()), 'name': keyword, 'remark': ''})
+            keyword_id_list.append({'id': str(bson.ObjectId()), 'name': keyword, 'remark': ''})
 
         return json.dumps(keyword_id_list, ensure_ascii=False)
 
@@ -118,13 +118,13 @@ class weipuDataAnalysis:
             .load()
 
         print("-------------------------------------------hbase维普原始数据---------------------------------------------")
-        df.show(truncate=False)
+        df.show(n=5, truncate=False)
 
         # 处理学者机构
         relation_author_address_udf = udf(self.relation_author_address, ArrayType(StringType()))
         df_relation_author_address = df.withColumn('relation_author_address', relation_author_address_udf(
                                                                            col('author'), col('org')))
-        df_relation_author_address.show(truncate=False)
+        df_relation_author_address.show(n=5, truncate=False)
 
         # 分割多列
         df_split_author_address = df_relation_author_address.\
@@ -176,11 +176,9 @@ class weipuDataAnalysis:
             col('keyword_list').alias('"keyword_list"')
         )
 
-
-        df_result.\
-            write.format('phoenix').mode('append') \
+        df_result.write.format('phoenix').mode('append') \
             .option("zkUrl", "hadoop01,hadoop02,hadoop03:2181") \
-            .option("table", "SCIENCE.WEIPU_ARTICLE_ANAYLYSIS") \
+            .option("table", "SCIENCE.WEIPU_ARTICLE_ANALYSIS") \
             .option("driver", "org.apache.phoenix.jdbc.PhoenixDriver") \
             .save()
 

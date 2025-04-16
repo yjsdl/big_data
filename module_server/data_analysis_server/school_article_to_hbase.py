@@ -181,7 +181,7 @@ if __name__ == '__main__':
         single_school=True,
         # collection='relation_subject_weipu',
         query_field='school_name',
-        query_value='江苏大学',
+        query_value='上海师范大学',
         year=list(range(1990, 2026))
     )
     c.run()

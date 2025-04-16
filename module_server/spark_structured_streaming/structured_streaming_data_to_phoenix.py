@@ -4,7 +4,7 @@
 # @file： structured_streaming_data_to_phoenix
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, from_json
-from pyspark.sql.types import StructType, StructField, StringType
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType
 
 
 def data_to_phoenix():
@@ -23,16 +23,31 @@ def data_to_phoenix():
     # 假设 Kafka 数据是 JSON，需要解析成 DataFrame
     schema = StructType([
         StructField("id", StringType(), True),
-        StructField("name", StringType(), True)
+        StructField("third_id", StringType(), True),
+        StructField("title", StringType(), True),
+        StructField("author", StringType(), True),
+        StructField("org", StringType(), True),
+        StructField("fund", StringType(), True),
+        StructField("journal", StringType(), True),
+        StructField("year", IntegerType(), True),
+        StructField("volum", StringType(), True),
+        StructField("issue", StringType(), True),
+        StructField("issn", StringType(), True),
+        StructField("cn", StringType(), True),
+        StructField("page", StringType(), True),
+        StructField("keyword", StringType(), True),
+        StructField("classification_code", StringType(), True),
+        StructField("abstract", StringType(), True),
+        StructField("url", StringType(), True)
     ])
     # schema = "id string, name STRING"
 
-    df_parsed = df_stream.selectExpr("CAST(value AS STRING)").select(from_json(col("value"), schema).alias("data")).select("data.*")
+    df_cast_value = df_stream.selectExpr("CAST(value AS STRING)", 'timestamp')\
+        .select(from_json(col("value"), schema).alias("data"), col('timestamp').alias('updated_time'))\
+        .select("data.*", 'updated_time')
 
-    df_result = df_parsed.select(
-        'id',
-        col('name').alias('"name"')
-    )
+
+    df_cast_value.writeStream.format('console').outputMode('append').start().awaitTermination()
 
     # 自定义写入 Phoenix 的函数
     def write_to_phoenix(batch_df, batch_id):
@@ -52,14 +67,13 @@ def data_to_phoenix():
             .save()
 
     # 打印
-    # df_result.writeStream.format('console').outputMode('append').start()
 
     # 使用 foreachBatch 将数据写入 Phoenix
-    df_result.writeStream \
-        .foreachBatch(write_to_phoenix) \
-        .outputMode("append") \
-        .start() \
-        .awaitTermination()
+    # df_result.writeStream \
+    #     .foreachBatch(write_to_phoenix) \
+    #     .outputMode("append") \
+    #     .start() \
+    #     .awaitTermination()
 
 
 if __name__ == '__main__':

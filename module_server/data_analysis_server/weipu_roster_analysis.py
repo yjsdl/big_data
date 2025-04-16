@@ -222,7 +222,7 @@ class weipuRosterAnalysis:
                 person_name_str = person_name_str.replace(s, '').replace('•', '·')
             person_name_str.strip(*[',，；;。：.']).lower()
             for k in ['课题组', "专家组", "编辑部", "实验室", "测试组", "论坛", "委员会", "专员", "编者", "评论员", '调研组', '工作组', '协作组',
-                      '办公室', '合作组']:
+                      '办公室', '合作组', '纪念馆']:
                 if k in person_name_str:
                     person_name_str = ''
             if len(person_name_str) == 1:
@@ -428,8 +428,8 @@ if __name__ == '__main__':
 # .config("spark.jars", "/export/server/phoenix/phoenix-client-embedded-hbase-2.5-5.2.0.jar")
 
     weipuRosterAnalysis(
-        school_name='新疆大学',
-        school_id='1612271517553397761'
+        school_name='西南民族大学',
+        school_id='345'
     ).obtain_data_analysis_from_hbase()
     spark.catalog.clearCache()
     spark.stop()
