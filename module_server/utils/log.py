@@ -24,7 +24,8 @@ class ColoredFormatter(logging.Formatter):
         "dGreen": "\033[38;5;22m",  # 暗绿色
         "bCyan": "\033[38;5;117m",  # 亮青色
         "cyan": "\033[36m",  # 青色
-        "white": "\033[97m",  # 白色
+        # "white": "\033[97m",  # 白色
+        "white": "\033[38;5;251m",  # 白色
         "reset": '\033[0m',  # 默认
         "bold": "\033[1m",  # 加粗
     }
@@ -105,6 +106,14 @@ class CustomRotatingFileHandler(RotatingFileHandler):
         self.stream = self._open()
 
 
+# 获取当前运行脚本的名称作为日志名
+def get_current_script_name():
+    try:
+        return os.path.splitext(os.path.basename(__import__("__main__").__file__))[0]
+    except AttributeError:
+        return "log_file"
+
+
 def setup_logger():
     log_obj = logging.getLogger()
     log_obj.setLevel(logging.DEBUG)
@@ -116,7 +125,7 @@ def setup_logger():
     log_obj.addHandler(console_handler)
 
     log_to_file = setting.LOG_TO_FILE
-    log_name = setting.LOG_NAME or "log_file"
+    log_name = setting.LOG_NAME or get_current_script_name()
     log_path = setting.LOG_PATH % log_name
     log_mode = setting.LOG_MODE
     log_max_bytes = setting.LOG_FILE_SIZE
