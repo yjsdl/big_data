@@ -106,6 +106,15 @@ class CustomRotatingFileHandler(RotatingFileHandler):
         self.stream = self._open()
 
 
+class KeywordFilter(logging.Filter):
+    def __init__(self, keywords):
+        super().__init__()
+        self.keywords = keywords
+
+    def filter(self, record):
+        return not any(keyword in record.getMessage() for keyword in self.keywords)
+
+
 # 获取当前运行脚本的名称作为日志名
 def get_current_script_name():
     try:
@@ -122,6 +131,15 @@ def setup_logger():
     # 自定义输出格式，控制台输出
     console_handler = ColoredConsoleHandler()
     console_handler.setLevel(setting.LOG_LEVEL_CONSOLE)
+
+    # 日志关键词过滤器（配置控制）
+    if setting.LOG_FILTER_ENABLED:
+        for pypi_module in setting.LOG_FILTER_PYPI:
+            logging.getLogger(pypi_module).setLevel(logging.WARNING)
+
+        keyword_filter = KeywordFilter(setting.LOG_FILTER_KEYWORDS)
+        console_handler.addFilter(keyword_filter)
+
     log_obj.addHandler(console_handler)
 
     log_to_file = setting.LOG_TO_FILE
