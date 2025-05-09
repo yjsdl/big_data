@@ -6,48 +6,41 @@
 设置日志
 """
 import os
+import json
 import logging
 from logging.handlers import RotatingFileHandler
-import module_server.setting as setting
 import datetime
+import module_server.setting as setting
 
 
 class ColoredFormatter(logging.Formatter):
     COLORS = {
-        "black": "\033[30m",  # 黑色
-        "gray": "\033[90m",  # 深灰色
-        "red": "\033[31m",  # 红色
-        "green": "\033[32m",  # 绿色
-        "yellow": "\033[33m",  # 黄色
-        "blue": "\033[34m",  # 蓝色
-        "purple": "\033[35m",  # 洋红色
-        "dGreen": "\033[38;5;22m",  # 暗绿色
-        "bCyan": "\033[38;5;117m",  # 亮青色
-        "cyan": "\033[36m",  # 青色
-        # "white": "\033[97m",  # 白色
-        "white": "\033[38;5;251m",  # 白色
-        "reset": '\033[0m',  # 默认
-        "bold": "\033[1m",  # 加粗
+        "black": "\033[30m",
+        "gray": "\033[90m",
+        "red": "\033[31m",
+        "green": "\033[32m",
+        "yellow": "\033[33m",
+        "blue": "\033[34m",
+        "purple": "\033[35m",
+        "dGreen": "\033[38;5;22m",
+        "bCyan": "\033[38;5;117m",
+        "cyan": "\033[36m",
+        "white": "\033[38;5;251m",
+        "reset": '\033[0m',
+        "bold": "\033[1m",
     }
 
     DEFAULT_STYLES = {
-        "spam": COLORS['green'] + COLORS['bold'],
         "DEBUG": COLORS['blue'] + COLORS['bold'],
-        "verbose": COLORS['blue'],
         "INFO": COLORS['white'] + COLORS['bold'],
         "WARNING": COLORS['yellow'] + COLORS['bold'],
-        "success": COLORS['green'] + COLORS['bold'],
         "ERROR": COLORS['red'] + COLORS['bold'],
         "CRITICAL": COLORS['red'] + COLORS['bold'],
-        "EXCEPTION": COLORS['red'] + COLORS['bold'],
         "ascTime": COLORS['green'] + COLORS['bold'],
-        "message": COLORS['green'],
         "lineno": COLORS['cyan'] + COLORS['bold'],
-        "threadName": COLORS['red'],
         "funcName": COLORS['cyan'] + COLORS['bold'],
         "module": COLORS['cyan'] + COLORS['bold'],
         "levelName": COLORS['white'] + COLORS['bold'],
-        "name": COLORS['blue'],
         "default": COLORS['blue'],
     }
 
@@ -55,27 +48,34 @@ class ColoredFormatter(logging.Formatter):
         super().__init__()
         self.styles = styles or self.DEFAULT_STYLES
 
-    def set_color(self, levelName: str = None):
-        return self.styles.get(levelName, "reset")
-
     def format(self, record):
         levelName = record.levelname
         ascTime = f"{self.styles.get('ascTime')}" \
                   f"{datetime.datetime.fromtimestamp(record.created).strftime('%Y-%m-%d %H:%M:%S')}" \
                   f"{self.COLORS['reset']}"
-        threadName = f"{self.styles.get('default')}{record.threadName}{self.COLORS['reset']}"
-        pathname = f"{self.styles.get('default')}{record.pathname}{self.COLORS['reset']}"
         lineno = f"{self.styles.get('lineno')}{record.lineno}{self.COLORS['reset']}"
         funcName = f"{self.styles.get('funcName')}{record.funcName}{self.COLORS['reset']}"
         module = f"{self.styles.get('module')}{record.module}{self.COLORS['reset']}"
         message = super().format(record)
 
-        levelColor = self.set_color(levelName)
+        levelColor = self.styles.get(levelName, "")
         levelName = f"{levelColor}{levelName}{self.COLORS['reset']}"
         message = f"{levelColor}{message}{self.COLORS['reset']}"
 
-        formatted_message = f"{ascTime} - {levelName} - {module}:{funcName}:{lineno} - {message}"
-        return formatted_message
+        return f"{ascTime} - {levelName} - {module}:{funcName}:{lineno} - {message}"
+
+
+class JSONFormatter(logging.Formatter):
+    def format(self, record):
+        log_record = {
+            "time": datetime.datetime.fromtimestamp(record.created).strftime('%Y-%m-%d %H:%M:%S'),
+            "level": record.levelname,
+            "module": record.module,
+            "function": record.funcName,
+            "line": record.lineno,
+            "message": record.getMessage(),
+        }
+        return json.dumps(log_record, ensure_ascii=False)
 
 
 class ColoredConsoleHandler(logging.StreamHandler):
@@ -115,59 +115,100 @@ class KeywordFilter(logging.Filter):
         return not any(keyword in record.getMessage() for keyword in self.keywords)
 
 
-# 获取当前运行脚本的名称作为日志名
-def get_current_script_name():
-    try:
-        return os.path.splitext(os.path.basename(__import__("__main__").__file__))[0]
-    except AttributeError:
-        return "log_file"
+class ErrorOnlyFilter(logging.Filter):
+    def filter(self, record):
+        return record.levelno >= logging.ERROR
 
 
-def setup_logger():
-    log_obj = logging.getLogger()
-    log_obj.setLevel(logging.DEBUG)
-    log_obj.handlers.clear()
+class LoggerManager:
+    def __init__(self):
+        self.logger = logging.getLogger()
+        self.logger.setLevel(logging.DEBUG)
+        self.logger.handlers.clear()
 
-    # 自定义输出格式，控制台输出
-    console_handler = ColoredConsoleHandler()
-    console_handler.setLevel(setting.LOG_LEVEL_CONSOLE)
+        self.formatter = self.get_formatter()
+        self.setup_handlers()
 
-    # 日志关键词过滤器（配置控制）
-    if setting.LOG_FILTER_ENABLED:
-        for pypi_module in setting.LOG_FILTER_PYPI:
-            logging.getLogger(pypi_module).setLevel(logging.WARNING)
+    def setup_handlers(self):
+        self.setup_console_handler()
 
-        keyword_filter = KeywordFilter(setting.LOG_FILTER_KEYWORDS)
-        console_handler.addFilter(keyword_filter)
+        if setting.LOG_TO_FILE:
+            self.setup_main_file_handler()
+            if getattr(setting, 'LOG_SPLIT_ERROR', True):
+                self.setup_error_file_handler()
 
-    log_obj.addHandler(console_handler)
+    def setup_console_handler(self):
+        console_handler = ColoredConsoleHandler()
+        console_handler.setLevel(setting.LOG_LEVEL_CONSOLE)
 
-    log_to_file = setting.LOG_TO_FILE
-    log_name = setting.LOG_NAME or get_current_script_name()
-    log_path = setting.LOG_PATH % log_name
-    log_mode = setting.LOG_MODE
-    log_max_bytes = setting.LOG_FILE_SIZE
-    log_backup_count = setting.LOG_BACKUP_COUNT
-    log_encoding = setting.LOG_ENCODING
-    log_level_file = setting.LOG_LEVEL_FILE
+        if setting.LOG_FILTER_ENABLED:
+            for module in setting.LOG_FILTER_PYPI:
+                logging.getLogger(module).setLevel(logging.WARNING)
+            keyword_filter = KeywordFilter(setting.LOG_FILTER_KEYWORDS)
+            console_handler.addFilter(keyword_filter)
 
-    if log_to_file:
-        # 文件输出
+        self.logger.addHandler(console_handler)
+
+    def setup_main_file_handler(self):
+        log_name = setting.LOG_NAME or self.get_script_name()
+        log_path = setting.LOG_PATH % log_name
+
         file_handler = CustomRotatingFileHandler(
             log_path,
-            mode=log_mode,
-            maxBytes=log_max_bytes,
-            backupCount=log_backup_count,
-            encoding=log_encoding
+            mode=setting.LOG_MODE,
+            maxBytes=setting.LOG_FILE_SIZE,
+            backupCount=setting.LOG_BACKUP_COUNT,
+            encoding=setting.LOG_ENCODING
         )
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(self.formatter)
+        if getattr(setting, 'LOG_SPLIT_ERROR', True):
+            # 如果启用单独错误日志，则主日志只记录低于ERROR级别
+            file_handler.addFilter(self.exclude_errors_filter())
 
-        file_handler.setLevel(log_level_file)
-        file_handler.suffix = "%Y-%m-%d.log"
-        file_handler.setFormatter(logging.Formatter(
-            '%(asctime)s - %(module)s - %(funcName)s:%(lineno)d - %(levelname)s - %(message)s'))
-        log_obj.addHandler(file_handler)
+        self.logger.addHandler(file_handler)
 
-    return log_obj
+    def setup_error_file_handler(self):
+        log_name = setting.LOG_NAME or self.get_script_name()
+        error_path = setting.LOG_PATH % f"{log_name}_error"
+
+        error_handler = CustomRotatingFileHandler(
+            error_path,
+            mode=setting.LOG_MODE,
+            maxBytes=setting.LOG_FILE_SIZE,
+            backupCount=setting.LOG_BACKUP_COUNT,
+            encoding=setting.LOG_ENCODING
+        )
+        error_handler.setLevel(logging.ERROR)
+        error_handler.setFormatter(self.formatter)
+
+        self.logger.addHandler(error_handler)
+
+    @staticmethod
+    def get_formatter():
+        if setting.LOG_JSON_OUTPUT:
+            return JSONFormatter()
+        else:
+            return logging.Formatter(
+                '%(asctime)s - %(levelname)s - %(module)s - %(funcName)s:%(lineno)d - %(message)s'
+            )
+
+    @staticmethod
+    def exclude_errors_filter():
+        class ExcludeErrorsFilter(logging.Filter):
+            def filter(self, record):
+                return record.levelno < logging.ERROR
+        return ExcludeErrorsFilter()
+
+    @staticmethod
+    def get_script_name():
+        try:
+            return os.path.splitext(os.path.basename(__import__("__main__").__file__))[0]
+        except AttributeError:
+            return "log_file"
+
+    def get_logger(self):
+        return self.logger
 
 
-logger = setup_logger()
+logger = LoggerManager().get_logger()
