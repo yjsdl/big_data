@@ -152,6 +152,8 @@ class LoggerManager:
     def setup_main_file_handler(self):
         log_name = setting.LOG_NAME or self.get_script_name()
         log_path = setting.LOG_PATH % log_name
+        if log_path and not os.path.exists(os.path.dirname(log_path)):
+            os.mkdir(os.path.dirname(log_path))
 
         file_handler = CustomRotatingFileHandler(
             log_path,
