@@ -10,7 +10,7 @@ import re
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql.functions import pandas_udf
 from pyspark.sql.types import StringType, BooleanType, ArrayType
-from pyspark.sql.functions import explode, split, col, concat_ws, sha2, udf, lit, md5, broadcast
+from pyspark.sql.functions import explode, split, col, concat_ws, sha2, udf, lit, md5, broadcast, to_timestamp
 from datetime import datetime
 from pyspark.storagelevel import StorageLevel
 
@@ -160,7 +160,7 @@ class weipuRosterAnalysis:
             .load()
         print('--------------------------------------------学校判断策略------------------------------------------------')
         df.show()
-        # 学校排除策略
+        # 学校判断策略
         dic_school_lists = df.collect()
         print(dic_school_lists)
         return dic_school_lists
@@ -217,12 +217,14 @@ class weipuRosterAnalysis:
             pattern = r'\d|\（.*?\）'
             person_name_str = re.sub(pattern, '', raw_person_name_str)
             for s in ['（特约专家）', '（指导老师）', '（辅导老师）', '（指导专家）', '指导专家/', '（整理者）', '（评论）', '（摘译）', '（审校）', '（综述）', '（口述）',
-                      '（整理）', '等、', '等', '《西安建筑科技大学学报》编辑部', '西安建筑科技大学学报编辑部', '编者', '本刊记者', '指导老师',
-                      '（设计/撰文）', '（文/图）', '（插图）', '（指导）', '（图/文）', '（点评）', '（编译）', '（译）', '（校）', '（综述', '（图）', '通信作者']:
+                      '（整理）', '等、', '等', '《西安建筑科技大学学报》编辑部', '西安建筑科技大学学报编辑部', '编者', '本刊记者', '指导老师', '、', '（编译', '（摘译',
+                      '（设计/撰文）', '（文/图）', '（插图）', '（指导）', '（图/文）', '（点评）', '（编译）', '（译）', '（校）', '（综述', '（图）', '通信作者',
+                      '综述']:
                 person_name_str = person_name_str.replace(s, '').replace('•', '·')
-            person_name_str.strip(*[',，；;。：.']).lower()
+            person_name_str = person_name_str.strip(*[',，；;。：.·"．']).lower()
             for k in ['课题组', "专家组", "编辑部", "实验室", "测试组", "论坛", "委员会", "专员", "编者", "评论员", '调研组', '工作组', '协作组',
-                      '办公室', '合作组', '纪念馆']:
+                      '办公室', '合作组', '纪念馆', '教学组', '小组', '研究中心', '项目组', '筹备组', '编写组', '研究组', '评价组', '学组',
+                      '分会']:
                 if k in person_name_str:
                     person_name_str = ''
             if len(person_name_str) == 1:
@@ -283,7 +285,7 @@ class weipuRosterAnalysis:
             .load()
 
         print("-------------------------------------------hbase维普原始数据---------------------------------------------")
-        # df.show(truncate=False)
+        # df.show(truncate=False, n=5)
 
         # 格式化学者机构
         format_person_address_udf = udf(self.format_person_address, ArrayType(ArrayType(StringType())))
@@ -407,8 +409,8 @@ class weipuRosterAnalysis:
         df_second_org = df_other_second_org_filter.withColumn('"second_org_str"',
                                                               other_org_to_second_udf(col('"other_second_org_str"')))
 
-        df_second_org_updated_time = df_second_org.withColumn('"updated_time"', lit(datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-        # df_second_org_updated_time.show(truncate=False, n=100)
+        df_second_org_updated_time = df_second_org.withColumn('"updated_time"', to_timestamp(lit(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))))
+        # df_second_org_updated_time.show(truncate=False, n=20)
 
         df_second_org_updated_time.write.format('phoenix').mode('append') \
             .option("zkUrl", "hadoop01,hadoop02,hadoop03:2181") \
@@ -428,8 +430,8 @@ if __name__ == '__main__':
 # .config("spark.jars", "/export/server/phoenix/phoenix-client-embedded-hbase-2.5-5.2.0.jar")
 
     weipuRosterAnalysis(
-        school_name='西南民族大学',
-        school_id='345'
+        school_name='南京农业大学',
+        school_id='38'
     ).obtain_data_analysis_from_hbase()
     spark.catalog.clearCache()
     spark.stop()

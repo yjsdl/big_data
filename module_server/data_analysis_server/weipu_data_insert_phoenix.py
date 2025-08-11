@@ -60,6 +60,6 @@ class weiPuDataInsertPhoenix:
 if __name__ == '__main__':
     weiPuDataInsertPhoenix(
         query_field='school_name',
-        query_value='南京师范大学',
+        query_value='南京农业大学',
         year=list(range(1990, 2026))
     ).article_insert_phoenix()

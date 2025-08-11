@@ -8,9 +8,11 @@
 import re
 import json
 import bson
+import time
 from pyspark.sql import SparkSession
 from pyspark.sql.types import StringType, ArrayType
-from pyspark.sql.functions import md5, udf, col, split, explode
+from pyspark.sql.functions import udf, col
+from module_server.utils.log import logger
 
 
 class weipuDataAnalysis:
@@ -84,6 +86,8 @@ class weipuDataAnalysis:
 
     @staticmethod
     def handle_keyword(keyword_str):
+        if not keyword_str:
+            return ''
         keyword_id_list = []
         keyword_str = keyword_str.strip(*[';；%'])
         keyword_list = re.split("[;；%]", keyword_str)
@@ -106,10 +110,9 @@ class weipuDataAnalysis:
         "page", "keyword", "classification_code", "abstract", "url", "school_name", "school_id", "updated_time"
         FROM SCIENCE.RAW_WEIPU_ARTICLE_METADATA
         WHERE "school_id" = '{self._school_id}' 
-        limit 50
         """
-        # table_query = table_query_format.replace(":school_id", str(self._school_id))
-
+        logger.info(f'开始清洗学校 - {self._school_name} - {self._school_id}')
+        start_time = time.time()
         df = spark.read \
             .format("jdbc") \
             .option("url", self._zookeeper_url) \
@@ -124,7 +127,7 @@ class weipuDataAnalysis:
         relation_author_address_udf = udf(self.relation_author_address, ArrayType(StringType()))
         df_relation_author_address = df.withColumn('relation_author_address', relation_author_address_udf(
                                                                            col('author'), col('org')))
-        df_relation_author_address.show(n=5, truncate=False)
+        # df_relation_author_address.show(n=5, truncate=False)
 
         # 分割多列
         df_split_author_address = df_relation_author_address.\
@@ -132,13 +135,13 @@ class weipuDataAnalysis:
             withColumn('author_order', col('relation_author_address').getItem(1)).\
             withColumn('address_order', col('relation_author_address').getItem(2))
 
-        df_split_author_address.show(truncate=False)
+        # df_split_author_address.show(truncate=False)
 
         # 处理关键词
         handle_keyword_udf = udf(self.handle_keyword, StringType())
         df_handle_keyword = df_split_author_address.withColumn('keyword_list', handle_keyword_udf(col('keyword')))
 
-        df_handle_keyword.show(truncate=False)
+        # df_handle_keyword.show(truncate=False)
         print(df_handle_keyword.columns)
         # # 行转列
         # df_explode_author_address = df_format_author_address.withColumn('author_address_rows', explode(
@@ -176,23 +179,29 @@ class weipuDataAnalysis:
             col('keyword_list').alias('"keyword_list"')
         )
 
-        df_result.write.format('phoenix').mode('append') \
+        df_repartition = df_result.repartition(10)
+        df_repartition.write.format('phoenix').mode('append') \
             .option("zkUrl", "hadoop01,hadoop02,hadoop03:2181") \
-            .option("table", "SCIENCE.WEIPU_ARTICLE_ANALYSIS") \
+            .option("table", "SCIENCE.TEST_WEIPU_ARTICLE_ANALYSIS") \
             .option("driver", "org.apache.phoenix.jdbc.PhoenixDriver") \
+            .option("batchsize", 5000) \
+            .option("hbase.client.write.buffer", "20971520") \
+            .option("phoenix.mutate.batchSize", "5000") \
             .save()
 
+        end_time = time.time()
+        logger.info(f'当前学校 - {self._school_name} - {self._school_id} - 清洗结束， 耗时{end_time-start_time}秒')
         # df_handle_keyword.coalesce(1).write.csv("hdfs:///tmp/python_spark_project/data/output_single.csv", header=True, mode='overwrite')
 
 
 if __name__ == '__main__':
     spark = SparkSession.builder. \
         appName('weipu data analysis'). \
-        master('local[*]'). \
+        master('yarn'). \
         getOrCreate()
     weipuDataAnalysis(
-        school_name='中国人民大学',
-        school_id='88'
+        school_name='清华大学',
+        school_id='124'
     ).obtain_data_analysis_from_hbase()
     spark.catalog.clearCache()
     spark.stop()

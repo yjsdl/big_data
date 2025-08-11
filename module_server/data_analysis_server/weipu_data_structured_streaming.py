@@ -146,11 +146,11 @@ class weipuDataAnalysis:
                 col('keyword_list').alias('"keyword_list"')
             )
 
-            # df_result.write.format('phoenix').mode('append') \
-            #     .option("zkUrl", "hadoop01,hadoop02,hadoop03:2181") \
-            #     .option("table", "SCIENCE.WEIPU_ARTICLE_ANALYSIS") \
-            #     .option("driver", "org.apache.phoenix.jdbc.PhoenixDriver") \
-            #     .save()
+            df_result.write.format('phoenix').mode('append') \
+                .option("zkUrl", "hadoop01,hadoop02,hadoop03:2181") \
+                .option("table", "SCIENCE.WEIPU_ARTICLE_ANALYSIS") \
+                .option("driver", "org.apache.phoenix.jdbc.PhoenixDriver") \
+                .save()
         except Exception as e:
             print(f"[Batch {batch_id}] 错误: {e}")
 
