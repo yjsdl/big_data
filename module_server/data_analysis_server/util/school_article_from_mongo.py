@@ -23,6 +23,7 @@ school_alias_name_dict = {
     "湖南中医药大学": {"$in": ["湖南中医药大学", "湖南中医学院"]},
     "河北中医药大学": {"$in": ["河北中医药大学", "河北中医学院"]},
     "河北工业职业技术大学": {"$in": ["河北工业职业技术大学", "河北工业职业技术学院"]},
+    "苏州科技大学": {"$in": ["苏州科技学院", "苏州科技大学"]},
 }
 
 
@@ -137,27 +138,6 @@ class exportIncrementData:
             f'当前学校- {self._query_value}-{self._school_id} - {year} - 年 - 导出发文- {len(article_id_list)} -条')
         return {'article_id_list': article_id_list, 'article_list': result_list, 'year': year}
 
-        # for i in range(0, len(result_list), 1000):
-        #     article_list = result_list[i:i+1000]
-        #
-        #     sql = """upsert into SCIENCE.RAW_WEIPU_ARTICLE_METADATA values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"""
-        #     # 批量提交1000条，如果出错，一条一条提交
-        #     data_state = self._phoenix_server.upsert_many(sql, article_list)
-        #
-        #     if data_state:
-        #         success_data.extend(data_id_list[i: i+1000])
-        #     else:
-        #         for article_tuple in article_list:
-        #             data_state = self._phoenix_server.upsert_one(sql, article_tuple)
-        #             if data_state:
-        #                 success_data.append(article_tuple[1])
-        #             else:
-        #                 error_data.append(article_tuple[1])
-        # logger.info(
-        #     f'当前学校{self._query_value} - {year}年 - 导出发文{len(data_id_list)}条 - '
-        #     f'成功{len(success_data)} - 失败{len(error_data)}')
-        # logger.info(f'失败id为 - {error_data}')
-
     def export_article(self):
         if self._years and isinstance(self._years, list):
             for year in self._years:
@@ -170,14 +150,11 @@ class exportIncrementData:
 
 
 if __name__ == '__main__':
-    # c = exportIncrementData(
-    #     # collection='relation_subject_weipu',
-    #     # 是否按年份过滤
-    #     query_field='school_name',
-    #     query_value='桂林医科大学',
-    #     year=list(range(1990, 2026))
-    # )
-    # c.export_article()
-    logger.info('测试')
-    logger.error('测试')
-    logger.warning('测试')
+    c = exportIncrementData(
+        # collection='relation_subject_weipu',
+        # 是否按年份过滤
+        query_field='school_name',
+        query_value='桂林医科大学',
+        year=list(range(1990, 2026))
+    )
+    c.export_article()
