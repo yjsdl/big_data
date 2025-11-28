@@ -385,13 +385,17 @@ def process_author_address_row(third_id, author_raw, author_abb_raw, author_addr
 
         for index, author_name in enumerate(author_raw_list, start=1):
             # author_abb_to_full_dict[author_abb_list[index - 1]] = author_name
+            author_name_standard = handle_format_str(author_name, str_type='name_standard')
             author_name_format = handle_format_str(author_name)
             author_alias = author_abb_raw_list[index - 1]
+            author_alias_standard = handle_format_str(author_alias, str_type='name_standard')
             author_alias_format = handle_format_str(author_alias)
             author_id = str(bson.ObjectId())
             author_sort_dict = {
-                'author_id': author_id, 'author_name': author_name, 'author_name_format': author_name_format,
-                'author_number': index, 'author_alias': author_alias, 'author_alias_format': author_alias_format,
+                'author_id': author_id, 'author_name': author_name.strip(), 'author_name_standard': author_name_standard,
+                'author_name_format': author_name_format,
+                'author_number': index, 'author_alias': author_alias.strip(), 'author_alias_standard': author_alias_standard,
+                'author_alias_format': author_alias_format,
                 'rep_author_number': 0,
             }
             author_result_list.append(author_sort_dict)
@@ -414,8 +418,9 @@ def process_author_address_row(third_id, author_raw, author_abb_raw, author_addr
 
                 for author_msg_dict in author_result_list:
                     author_msg_dict['address_id'] = address_id
+                    # 作者地址关系去掉标签rep_tag=0
                     relation_author_address_list.append(
-                        dict(author_id=author_msg_dict['author_id'], address_id=address_id, rep_tag=0))
+                        dict(author_id=author_msg_dict['author_id'], address_id=address_id))
 
         else:
             for index, author_address_one_str in enumerate(author_address_standard_list, start=1):
@@ -438,8 +443,9 @@ def process_author_address_row(third_id, author_raw, author_abb_raw, author_addr
                         for author_msg_dict in author_result_list:
                             if author_format_one_str in (
                                     author_msg_dict['author_name_format'], author_msg_dict['author_alias_format']):
+                                # 作者地址关系去掉标签rep_tag=0
                                 relation_author_address_list.append(
-                                    dict(author_id=author_msg_dict['author_id'], address_id=address_id, rep_tag=0))
+                                    dict(author_id=author_msg_dict['author_id'], address_id=address_id))
 
                 else:
                     # 发文地址中没有作者信息
@@ -491,21 +497,23 @@ def process_rep_author_address_row(third_id, rep_author_raw):
 
             # 通讯作者
             for rep_author_name in rep_author.split('(')[0].split(';'):
-                author_name_format = handle_format_str(rep_author_name)
+                rep_author_name_standard = handle_format_str(rep_author_name, str_type='name_standard')
+                rep_author_name_format = handle_format_str(rep_author_name)
                 rep_author_id = str(bson.ObjectId())
 
-                # 如果作者相同, 先查找
+                # 作者地址关系去掉标签rep_tag=1
                 relation_rep_author_address_list.append(
-                    dict(rep_author_id=rep_author_unique_id_dict.get(author_name_format, rep_author_id),
-                         rep_address_id=rep_address_id, rep_tag=1))
-
-                if author_name_format not in rep_author_dict.keys():
-                    rep_author_dict[author_name_format] = rep_author_num
-                    rep_author_unique_id_dict[author_name_format] = rep_author_id
+                    dict(author_id=rep_author_unique_id_dict.get(rep_author_name_format, rep_author_id),
+                         address_id=rep_address_id))
+                # 先查找作者是否相同, 如果作者相同,取第一个
+                if rep_author_name_format not in rep_author_dict.keys():
+                    rep_author_dict[rep_author_name_format] = rep_author_num
+                    rep_author_unique_id_dict[rep_author_name_format] = rep_author_id
                     rep_author_list.append(dict(
                         author_id=rep_author_id,
                         author_name=rep_author_name,
-                        author_name_format=author_name_format,
+                        author_name_standard=rep_author_name_standard,
+                        author_name_format=rep_author_name_format,
                         author_number=0,
                         author_alias='',
                         author_alias_format='',
@@ -541,20 +549,12 @@ def process_author_address_relation_row(row):
     # 通讯作者
     rep_author_list, rep_address_list, relation_rep_author_address_list = process_rep_author_address_row(third_id,
                                                                                                          rep_author_raw)
-    print(f"rep_author_list:{rep_author_list}")
-    print(f"rep_address_list:{rep_address_list}")
-    print(f"relation_rep_author_address_list:{relation_rep_author_address_list}")
     # 普通作者
     author_result_list, address_result_list, relation_author_address_list = process_author_address_row(
         third_id,
         author_raw,
         author_abb_raw,
         author_address_raw)
-
-    print(f"author_result_list:{author_result_list}")
-    print(f"address_result_list:{address_result_list}")
-    print(f"relation_author_address_list:{relation_author_address_list}")
-
 
     result_author_list = [a.copy() for a in author_result_list]
 
@@ -563,15 +563,15 @@ def process_author_address_relation_row(row):
     # zjp:作者地址对应关系，只需要存两个字段，author_id，address_id
 
     for rep_author_dict in rep_author_list:
-        rep_name_fmt = rep_author_dict.get("author_name_format")
+        rep_name_standard = rep_author_dict.get("author_name_standard")
         matched = False
 
         for author_dict in result_author_list:
-            if rep_name_fmt in (author_dict.get("author_name_format"), author_dict.get("author_alias_format")):
+            if rep_name_standard in (author_dict.get("author_name_standard"), author_dict.get("author_alias_standard")):
                 author_dict["rep_author_number"] = rep_author_dict.get("rep_author_number", 0)
                 for relation_rep_author_address_dict in relation_rep_author_address_list:
-                    if relation_rep_author_address_dict['rep_author_id'] == rep_author_dict['author_id']:
-                        relation_rep_author_address_dict['rep_author_id'] = author_dict['author_id']
+                    if relation_rep_author_address_dict['author_id'] == rep_author_dict['author_id']:
+                        relation_rep_author_address_dict['author_id'] = author_dict['author_id']
                 # 将通讯作者地址关系里面
                 matched = True
                 break
@@ -692,8 +692,9 @@ class wosDataAnalysis:
 
         try:
             print("------------------------------hbase维普原始数据------------------------------")
-            # batch_df1 = batch_df.limit(5)
-            batch_df1 = batch_df.filter(col("ID") == "WOS:001243765000001")
+            batch_df1 = batch_df
+            # batch_df1 = batch_df.filter(col("ID") == "WOS:001243765000001")
+            batch_df1.show(truncate=False)
 
             # 处理作者和通讯地址
             df_handle_author_address = batch_df1. \
@@ -716,6 +717,7 @@ class wosDataAnalysis:
 
             # 处理发文关系
             self.data_to_db_and_school_relation(df_handle_early_publication)
+            print('结束执行')
 
         except Exception as e:
             print(f"[Batch {'batch_id'}] 错误: {e}")
@@ -745,7 +747,7 @@ class wosDataAnalysis:
         print('执行第二次')
         # 根据第三方id查出初始的学校关系
         third_id_list = [row['ID'] for row in df_id_address.select('ID').distinct().collect()]
-
+        print('执行第三次')
         # 处理发文关系
         self.obtain_relation_school_raw(third_id_list, df_id_address)
         logger.info('发文关系入库完成')
@@ -820,6 +822,7 @@ class wosDataAnalysis:
         # 假设 Kafka 数据是 JSON，需要解析成 DataFrame
         schema = StructType([
             StructField("id", StringType(), True),
+            StructField("school_id", StringType(), True),
             StructField("PT", StringType(), True),
             StructField("AU", StringType(), True),
             StructField("BA", StringType(), True),
@@ -904,7 +907,7 @@ class wosDataAnalysis:
         df_cast_value.writeStream \
             .foreachBatch(self.article_data_analysis) \
             .outputMode("append") \
-            .trigger(processingTime="10 seconds") \
+            .trigger(processingTime="2 seconds") \
             .option("checkpointLocation", "hdfs://hadoop01:8020/spark_kafka/ch") \
             .start() \
             .awaitTermination()
