@@ -33,13 +33,13 @@ class kafkaProducerAsync:
         setattr(log_setting, 'LOG_SPLIT_ERROR', True)
 
     def on_send_success(self, record_metadata, data):
-        msg_id = data.get("third_id", "unknown_id")
+        msg_id = data.get("id", "unknown_id")
         self.logger.info(
             f"{msg_id} - 成功发送到: "
             f"topic={record_metadata.topic} - partition={record_metadata.partition} - offset={record_metadata.offset}")
 
     def on_send_error_factory(self, data, topic, retries=0):
-        msg_id = data.get("third_id", "unknown_id")
+        msg_id = data.get("id", "unknown_id")
 
         def on_send_error(exc):
             self.logger.info(f"{msg_id} - 第 {retries + 1} 次发送失败: {exc}")
@@ -69,7 +69,7 @@ class kafkaProducerAsync:
             future.add_callback(lambda metadata: self.on_send_success(metadata, data))
             future.add_errback(self.on_send_error_factory(data, topic))
         except KafkaError as e:
-            self.logger.error(f'{data.get("third_id", "")} - 生产失败\n'
+            self.logger.error(f'{data.get("id", "")} - 生产失败\n'
                               f'失败原因：{e}')
 
 
@@ -79,4 +79,4 @@ if __name__ == '__main__':
         {"id": 2, "name": "Bob"},
         {"id": 3, "name": "Charlie"}
     ]
-    kafkaProducerAsync().send_data(_data_list)
+    kafkaProducerAsync(topic='testTopic01').send_data(_data_list)
