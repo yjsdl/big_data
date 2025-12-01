@@ -5,18 +5,15 @@
 """
 从kafka中读取wos数据，经过处理存储到phoenix
 """
-import math
 import re
 import json
-from datetime import datetime, timedelta
 import bson
 import time
 from pyspark import StorageLevel
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql.types import StringType, IntegerType, StructField, StructType, BooleanType
 from pyspark.sql.functions import col, from_json, collect_list, struct, pandas_udf, \
-    regexp_extract, date_sub, current_timestamp
-from functools import reduce
+    regexp_extract, md5, coalesce, concat, lit
 from module_server.utils.log import logger
 import pandas as pd
 from module_server.data_analysis_server.util.utils import handle_format_str, replace_semicolon_outside_brackets, \
@@ -676,25 +673,14 @@ class wosDataAnalysis:
                 return spark.createDataFrame([], schema=StructType([]))
 
     def article_data_analysis(self, batch_df, batch_id):
-    # def article_data_analysis(self):
 
         """
         从kafka中读取数据，并进行作者，地址清洗
         :return:
         """
-        table_query_format = f"""
-        SELECT *
-        FROM SCIENCE.TEST_DATA_WOS_ARTICLE
-        limit 50
-        """
-        # batch_df = self.data_from_db(query_name='wos原始数据', params_type="dbtable",
-        #                              table_or_sql_query="SCIENCE.TEST_DATA_WOS_ARTICLE")
-
         try:
             print("------------------------------hbase维普原始数据------------------------------")
             batch_df1 = batch_df
-            # batch_df1 = batch_df.filter(col("ID") == "WOS:001243765000001")
-            batch_df1.show(truncate=False)
 
             # 处理作者和通讯地址
             df_handle_author_address = batch_df1. \
@@ -712,15 +698,11 @@ class wosDataAnalysis:
             df_handle_early_publication = df_handle_publication_date.\
                 withColumn('"early_date_format"', regexp_extract(col("EA"), r"(\d{4})", 1))
 
-            df_handle_early_publication.show(truncate=False)
-            print('执行第一次')
-
             # 处理发文关系
             self.data_to_db_and_school_relation(df_handle_early_publication)
-            print('结束执行')
 
         except Exception as e:
-            print(f"[Batch {'batch_id'}] 错误: {e}")
+            logger.warning(f"[Batch {'batch_id'}] 错误: {e}")
 
     def data_to_db_and_school_relation(self, df_row: DataFrame):
         """
@@ -731,10 +713,8 @@ class wosDataAnalysis:
         :param df_row:
         :return:
         """
-        # # 将格式化后的数据缓存，后续做清洗
-        # df_row.persist(storageLevel=StorageLevel.MEMORY_AND_DISK)
         # 缓存两个字段
-        df_id_address = df_row.select('ID', '"address_order"').persist(storageLevel=StorageLevel.MEMORY_AND_DISK)
+        df_id_address = df_row.select('ID', 'school_id', '"address_order"').persist(storageLevel=StorageLevel.MEMORY_AND_DISK)
 
         logger.info(f"数据清洗完成, 准备入库")
         df_row_rename = df_row.withColumnRenamed("updated_time", '"updated_time"')
@@ -744,71 +724,42 @@ class wosDataAnalysis:
             .option("driver", "org.apache.phoenix.jdbc.PhoenixDriver") \
             .option("batchsize", 5000) \
             .save()
-        print('执行第二次')
-        # 根据第三方id查出初始的学校关系
-        third_id_list = [row['ID'] for row in df_id_address.select('ID').distinct().collect()]
-        print('执行第三次')
         # 处理发文关系
-        self.obtain_relation_school_raw(third_id_list, df_id_address)
+        self.obtain_relation_school_raw(df_id_address)
         logger.info('发文关系入库完成')
         df_id_address.unpersist()
 
-    def obtain_relation_school_raw(self, third_id_list: list, df_row: DataFrame, batch_size: int = 5000):
+    def obtain_relation_school_raw(self, df_row: DataFrame):
         """
         :param df_row: id和地址表
-        :param third_id_list: 需要过滤的 third_id 列表
-        :param batch_size: 每批查询的 ID 数量，防止 SQL 过长
         :return:
         """
 
-        start_time = (datetime.now() - timedelta(days=3)).strftime("%Y-%m-%d %H:%M:%S")
-        total_batches = math.ceil(len(third_id_list) / batch_size)
-        df_all_batches = []
-        for i in range(total_batches):
-            batch_ids = third_id_list[i * batch_size:(i + 1) * batch_size]
+        # 判断策略和排除策略
+        filter_school_udf = self.strategy_manager.process_relation_school_udf()
 
-            # 将ID拼接成 SQL IN (...)，记得加单引号
-            batch_ids_str = ",".join(f"'{x}'" for x in batch_ids)
+        df_id_source_date = df_row.withColumnRenamed('ID', 'third_id'). \
+            withColumn('ID', md5(concat(coalesce(col("school_id"), lit("")), coalesce(col("third_id"), lit(""))))). \
+            withColumn('source_type', lit(1))
 
-            table_query = f"""
-                    SELECT "ID", "third_id", "school_id", "source_type", "updated_time"
-                    FROM SCIENCE.RELATION_SCHOOL_ARTICLE
-                    WHERE "updated_time" >= TO_TIMESTAMP('{start_time}')
-                      AND "third_id" IN ({batch_ids_str})
-                """
+        df_school_filter = df_id_source_date.filter(
+            filter_school_udf(col('third_id'), col("school_id"), col('"address_order"')))
 
-            df: DataFrame = self.data_from_db(query_name='wos发文关系', params_type="query", table_or_sql_query=table_query)
-            df_all_batches.append(df)
+        # 重命名所有列
+        df_renamed = df_school_filter.select(
+            col("ID"),
+            col("third_id").alias('"third_id"'),
+            col("school_id").alias('"school_id"'),
+            col("source_type").alias('"source_type"'),
+            col("updated_time").alias('"updated_time"')
+        )
 
-        # 合并所有批次结果
-        if df_all_batches:
-            df_final_result = reduce(DataFrame.union, df_all_batches)
-            df_final_result.show()
-
-            df_join_address = df_final_result.join(df_row, df_final_result["third_id"] == df_row["ID"], "inner").\
-                drop(df_row['ID'])
-
-            # 判断策略和排除策略
-            filter_school_udf = self.strategy_manager.process_relation_school_udf()
-
-            df_school_filter = df_join_address.filter(
-                filter_school_udf(col("third_id"), col("school_id"), col('"address_order"')))
-
-            # 重命名所有列
-            df_renamed = df_school_filter.select(
-                col("ID"),
-                col("third_id").alias('"third_id"'),
-                col("school_id").alias('"school_id"'),
-                col("source_type").alias('"source_type"'),
-                col("updated_time").alias('"updated_time"')
-            )
-
-            df_renamed.write.format('phoenix').mode('append') \
-                .option("zkUrl", "hadoop01,hadoop02,hadoop03:2181") \
-                .option("table", "SCIENCE.RELATION_SCHOOL_ARTICLE_RESULT") \
-                .option("driver", "org.apache.phoenix.jdbc.PhoenixDriver") \
-                .option("batchsize", 5000) \
-                .save()
+        df_renamed.write.format('phoenix').mode('append') \
+            .option("zkUrl", "hadoop01,hadoop02,hadoop03:2181") \
+            .option("table", "SCIENCE.RELATION_SCHOOL_ARTICLE_RESULT") \
+            .option("driver", "org.apache.phoenix.jdbc.PhoenixDriver") \
+            .option("batchsize", 5000) \
+            .save()
 
     def read_article_from_kafka(self):
         # 读取 Kafka 数据
@@ -895,9 +846,6 @@ class wosDataAnalysis:
             StructField("DA", StringType(), True),
             StructField("updated_time", StringType(), True)
         ])
-
-        # df_stream.selectExpr("CAST(value AS STRING)", 'timestamp').\
-        #     writeStream.format('console').outputMode('append').start().awaitTermination()
 
         df_cast_value = df_stream.selectExpr("CAST(value AS STRING)") \
             .select(from_json(col("value"), schema).alias("data")) \
