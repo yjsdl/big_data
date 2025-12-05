@@ -14,7 +14,8 @@ from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql.types import StringType, IntegerType, StructField, StructType, BooleanType
 from pyspark.sql.functions import col, from_json, collect_list, struct, pandas_udf, \
     regexp_extract, md5, coalesce, concat, lit
-from module_server.utils.log import logger
+from module_server.data_analysis_server.util.log import logger
+from module_server.data_analysis_server.util.config import env_dict
 import pandas as pd
 from module_server.data_analysis_server.util.utils import handle_format_str, replace_semicolon_outside_brackets, \
     get_month_str, month_str_dict
@@ -74,7 +75,7 @@ class strategyManager:
                                                    table_or_sql_query=table_or_sql_query, retry_num=retry_num - 1,
                                                    retry_interval=retry_interval)
             else:
-                print(f"sql查询失败，已重试 {retry_num} 次，放弃重试")
+                logger.warning(f"sql查询失败，已重试 {retry_num} 次，放弃重试")
                 return spark.createDataFrame([], schema=StructType([]))
 
     def ai_dic_not_school_from_mysql(self):
@@ -480,7 +481,8 @@ def process_rep_author_address_row(third_id, rep_author_raw):
         for rep_author in rep_author_raw.split('.;'):
             # 先处理通讯地址，可能一个地址对应多个作者
             # 通讯地址
-            rep_address_raw = rep_author.split(')，')[1]
+            # rep_address_raw = rep_author.split(')，')[1]
+            rep_address_raw = re.split(r"\)\,|\)，", rep_author)[1].strip()
             rep_address_format = handle_format_str(rep_address_raw)
             rep_address_id = str(bson.ObjectId())
 
@@ -620,15 +622,16 @@ def process_author_address_pandas_udf(third_id, author_raw, author_abb_raw, rep_
 
 
 class wosDataAnalysis:
-    def __init__(self):
+    def __init__(self, default_env: str = 'env'):
+        self._env_dict = env_dict.get(default_env)
         self._zookeeper_url = (
-            "jdbc:phoenix:hadoop01,hadoop02,hadoop03:2181:hbase-unsecure;"
+            f"jdbc:phoenix:{self._env_dict.get('zookeeper')}:hbase-unsecure;"
             "characterEncoding=UTF-8;"
             "phoenix.schema.isNamespaceMappingEnabled=true;"
         )
         # Kafka 配置
-        self.kafka_bootstrap_servers = "hadoop01:9092,hadoop02:9092,hadoop03:9092"
-        self.kafka_topic = "testWosTopic"
+        # self.kafka_bootstrap_servers = "hdp01:9093"
+        # self.kafka_topic = "testTopic01"
         self._strategy_manager = None
 
     @property
@@ -668,7 +671,7 @@ class wosDataAnalysis:
                                          table_or_sql_query=table_or_sql_query, retry_num=retry_num - 1,
                                          retry_interval=retry_interval)
             else:
-                print(f"sql查询失败，已重试 {retry_num} 次，放弃重试")
+                logger.warning(f"sql查询失败，已重试 {retry_num} 次，放弃重试")
 
                 return spark.createDataFrame([], schema=StructType([]))
 
@@ -714,16 +717,17 @@ class wosDataAnalysis:
         :return:
         """
         # 缓存两个字段
-        df_id_address = df_row.select('ID', 'school_id', '"address_order"').persist(storageLevel=StorageLevel.MEMORY_AND_DISK)
+        df_id_address = df_row.select('ID', 'school_id', '"address_order"', 'updated_time').persist(storageLevel=StorageLevel.MEMORY_AND_DISK)
 
         logger.info(f"数据清洗完成, 准备入库")
-        df_row_rename = df_row.withColumnRenamed("updated_time", '"updated_time"')
+        df_row_rename = df_row.withColumnRenamed("updated_time", '"updated_time"').drop("school_id")
         df_row_rename.write.format('phoenix').mode('append') \
-            .option("zkUrl", "hadoop01,hadoop02,hadoop03:2181") \
+            .option("zkUrl", self._env_dict.get('zookeeper')) \
             .option("table", "SCIENCE.DATA_RESULT_WOS_ARTICLE") \
             .option("driver", "org.apache.phoenix.jdbc.PhoenixDriver") \
             .option("batchsize", 5000) \
             .save()
+
         # 处理发文关系
         self.obtain_relation_school_raw(df_id_address)
         logger.info('发文关系入库完成')
@@ -753,9 +757,8 @@ class wosDataAnalysis:
             col("source_type").alias('"source_type"'),
             col("updated_time").alias('"updated_time"')
         )
-
         df_renamed.write.format('phoenix').mode('append') \
-            .option("zkUrl", "hadoop01,hadoop02,hadoop03:2181") \
+            .option("zkUrl", self._env_dict.get('zookeeper')) \
             .option("table", "SCIENCE.RELATION_SCHOOL_ARTICLE_RESULT") \
             .option("driver", "org.apache.phoenix.jdbc.PhoenixDriver") \
             .option("batchsize", 5000) \
@@ -765,8 +768,8 @@ class wosDataAnalysis:
         # 读取 Kafka 数据
         df_stream = spark.readStream \
             .format("kafka") \
-            .option("kafka.bootstrap.servers", self.kafka_bootstrap_servers) \
-            .option("subscribe", self.kafka_topic) \
+            .option("kafka.bootstrap.servers", self._env_dict.get('kafka_bootstrap_servers')) \
+            .option("subscribe", self._env_dict.get('kafka_topic')) \
             .option("startingOffsets", "latest") \
             .load()
 
@@ -847,6 +850,9 @@ class wosDataAnalysis:
             StructField("updated_time", StringType(), True)
         ])
 
+        # df_stream.selectExpr("CAST(value AS STRING)", 'timestamp').\
+        #     writeStream.format('console').outputMode('append').start().awaitTermination()
+
         df_cast_value = df_stream.selectExpr("CAST(value AS STRING)") \
             .select(from_json(col("value"), schema).alias("data")) \
             .select("data.*")
@@ -856,7 +862,7 @@ class wosDataAnalysis:
             .foreachBatch(self.article_data_analysis) \
             .outputMode("append") \
             .trigger(processingTime="2 seconds") \
-            .option("checkpointLocation", "hdfs://hadoop01:8020/spark_kafka/ch") \
+            .option("checkpointLocation", f"hdfs://{self._env_dict.get('hdfs')}/spark_kafka/ch") \
             .start() \
             .awaitTermination()
 
@@ -866,7 +872,7 @@ if __name__ == '__main__':
         appName('test wos data structured streaming'). \
         master('local[*]'). \
         getOrCreate()
-    wosDataAnalysis().read_article_from_kafka()
+    wosDataAnalysis(default_env='dev').read_article_from_kafka()
 
     # wosDataAnalysis().article_data_analysis()
     # strategyManager().get_strategies()
